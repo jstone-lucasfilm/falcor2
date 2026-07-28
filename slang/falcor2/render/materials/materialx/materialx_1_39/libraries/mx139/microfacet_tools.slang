@@ -145,6 +145,16 @@ public float microfacet_aniso(float2 roughness_xy)
     return (1.0 - b) / (1.0 + b);
 }
 
+// genglsl mx_average_alpha over its own clamp range: the geometric mean of the
+// two anisotropic alphas, in the MaterialX alpha convention that
+// ggx_directional_albedo_analytic expects -- not the BSDL sqrt convention
+// microfacet_roughness returns for the tabulated energy curves.
+public float microfacet_average_alpha(float2 roughness_xy)
+{
+    const float2 a = clamp(roughness_xy, BSDL_EPSILON, 1.0);
+    return sqrt(a.x * a.y);
+}
+
 public MxGGXDist make_ggx_dist(float2 roughness_xy)
 {
     return MxGGXDist(microfacet_clamped_roughness_xy(roughness_xy));

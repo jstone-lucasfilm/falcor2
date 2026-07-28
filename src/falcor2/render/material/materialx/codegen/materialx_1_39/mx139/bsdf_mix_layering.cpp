@@ -930,15 +930,22 @@ std::string emit_bsdf_mix_root_bsdf(const MxFlatRootDesc& desc)
         e.line("    result.bsdf_N[" + std::to_string(i) + "] = " + bsdf_frame_field(bsdf_index) + ".normal");
         e.line("    result.bsdf_T[" + std::to_string(i) + "] = " + bsdf_frame_field(bsdf_index) + ".tangent");
         e.line("    result.bsdf_B[" + std::to_string(i) + "] = " + bsdf_frame_field(bsdf_index) + ".bitangent");
+        // Reflection-only albedo row, with through-material transmission on its
+        // own row — the same split the closure_tree collector makes, so both
+        // roots report an RT dielectric's interface readably.
+        e.line("    result.bsdf_albedo[" + std::to_string(i) + "] = " + eval_albedo + ".reflection");
         e.line(
-            "    result.bsdf_albedo[" + std::to_string(i) + "] = " + eval_albedo + ".reflection + "
-            + compatibility_albedo + ".material_instance_transmission"
+            "    result.bsdf_transmission[" + std::to_string(i) + "] = " + compatibility_albedo
+            + ".material_instance_transmission"
         );
         e.line(
             "    result.bsdf_weight[" + std::to_string(i) + "] += ctx.closure_weight * " + bsdf_weight_field(bsdf_index)
         );
         e.line("    result.bsdf_roughness[" + std::to_string(i) + "] = " + eval_roughness + ".roughness");
         e.line("    result.bsdf_scratch[" + std::to_string(i) + "] = " + eval_roughness + ".scratch");
+        e.line("    result.bsdf_extinction[" + std::to_string(i) + "] = " + eval_roughness + ".extinction");
+        e.line("    result.bsdf_ior[" + std::to_string(i) + "] = " + eval_roughness + ".ior");
+        e.line("    result.bsdf_kind[" + std::to_string(i) + "] = " + eval_roughness + ".kind");
         e.line("    reported_count = max(reported_count, " + std::to_string(i + 1) + ")");
         e.line("}", false);
     }

@@ -20,7 +20,11 @@ public struct MxContyKullaSheenMtx
 {
     public float roughness;
 
-    public __init(float rough) { roughness = max(rough, 0.06); }
+    // Numerical floor only (matching genglsl's 1/max(r, 0.005) in the NDF): the
+    // MaterialX spec's Conty-Kulla equations declare no roughness floor, and BSDL's
+    // 0.06 floor made every sheen below it evaluate as a wider lobe than authored —
+    // measured as a 27x conformance divergence growth at alpha 0.04.
+    public __init(float rough) { roughness = max(rough, 0.005); }
 
     public float D(float3 Hr)
     {
@@ -170,7 +174,7 @@ public struct MxSheenBSDF : ILayerableBSDF
         sheen_mode = mode;
         this.backfacing = backfacing;
         const bool zeltner = use_zeltner();
-        sheen_alpha = zeltner ? max(0.02, sqrt(base_roughness)) : max(0.06, base_roughness);
+        sheen_alpha = zeltner ? max(0.02, sqrt(base_roughness)) : max(0.005, base_roughness);
         if (backfacing) {
             Emiss = 1.0;
         } else if (zeltner) {
@@ -225,7 +229,9 @@ public struct MxSheenBSDF : ILayerableBSDF
 
     public RoughnessInformation eval_roughness(const float3 wi)
     {
-        return RoughnessInformation(float2(base_roughness, base_roughness), float3(0.0));
+        RoughnessInformation result = RoughnessInformation(float2(base_roughness, base_roughness), float3(0.0));
+        result.kind = k_bsdf_kind_sheen;
+        return result;
     }
 
     public float3 directional_albedo(const float3 wi) { return tint * (1.0 - layer_energy(wi)); }

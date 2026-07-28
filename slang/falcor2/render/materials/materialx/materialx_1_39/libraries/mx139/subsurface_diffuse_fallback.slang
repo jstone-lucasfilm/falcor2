@@ -52,7 +52,9 @@ public struct MxSubsurfaceDiffuseFallbackBSDF : ILayerableBSDF
     {
         // Subsurface fallback has no anisotropic roughness control; mark it
         // diffuse-equivalent for IBSDF.eval_roughness consumers.
-        return RoughnessInformation(float2(1.0, 1.0), float3(0.0));
+        RoughnessInformation result = RoughnessInformation(float2(1.0, 1.0), float3(0.0));
+        result.kind = k_bsdf_kind_subsurface;
+        return result;
     }
 
     public float3 directional_albedo(const float3 wi) { return albedo_value; }

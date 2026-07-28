@@ -101,7 +101,9 @@ public struct MxCompensatedDielectricBSDF<
 
     public RoughnessInformation eval_roughness(const float3 wi)
     {
-        return RoughnessInformation(roughness_xy, float3(0.0));
+        RoughnessInformation result = RoughnessInformation(roughness_xy, float3(0.0));
+        result.kind = k_bsdf_kind_dielectric;
+        return result;
     }
 
     [ForceInline]
@@ -137,6 +139,16 @@ public struct MxCompensatedDielectricBSDF<
     [ForceInline]
     private float layer_energy(float3 wi)
     {
+        // An index-matched interface does not exist optically, so the limits
+        // are exact: everything transmits, nothing is lost. This cannot come
+        // out of the policies below, because the eta they receive is already
+        // clamped to 1.001 (see index_matched in fresnel.slang) -- both the
+        // analytic Fresnel and the BSDL tables then charge the base for a
+        // grazing sliver the authored material does not have. Reflection-only
+        // layer_energy is the transmitted share; with refraction present it is
+        // the multiple-scattering loss.
+        if (fresnel.index_matched())
+            return dorefr() ? 0.0 : 1.0;
         return TCompensation::layer_energy(
             dorefl(),
             dorefr(),
@@ -345,11 +357,10 @@ public MxDielectricBSDF create_mx_dielectric(
 )
 {
     MxScatterTints scatter_tints = split_scatter_tints(scatter_mode, tint);
-    float material_ior = clamp_dielectric_ior(ior);
     const bool backfacing = !front_facing;
     return MxDielectricBSDF(
         roughness,
-        MxDielectricFresnel(material_ior, backfacing),
+        MxDielectricFresnel(ior, backfacing),
         scatter_tints.reflection,
         scatter_tints.transmission,
         float3(0.0),
@@ -372,11 +383,10 @@ public MxDielectricAiryBSDF create_mx_dielectric_airy(
 )
 {
     MxScatterTints scatter_tints = split_scatter_tints(scatter_mode, tint);
-    float material_ior = clamp_dielectric_ior(ior);
     const bool backfacing = !front_facing;
     return MxDielectricAiryBSDF(
         roughness,
-        MxDielectricAiryFresnel(material_ior, backfacing, thinfilm_thickness, thinfilm_ior),
+        MxDielectricAiryFresnel(ior, backfacing, thinfilm_thickness, thinfilm_ior),
         scatter_tints.reflection,
         scatter_tints.transmission,
         float3(0.0),
@@ -399,11 +409,10 @@ public MxDielectricTurquinAnalyticCompensationBSDF create_mx_dielectric_comp_tur
 )
 {
     MxScatterTints scatter_tints = split_scatter_tints(scatter_mode, tint);
-    float material_ior = clamp_dielectric_ior(ior);
     const bool backfacing = !front_facing;
     return MxDielectricTurquinAnalyticCompensationBSDF(
         roughness,
-        MxDielectricFresnel(material_ior, backfacing),
+        MxDielectricFresnel(ior, backfacing),
         scatter_tints.reflection,
         scatter_tints.transmission,
         float3(0.0),
@@ -426,11 +435,10 @@ public MxDielectricNoCompensationBSDF create_mx_dielectric_comp_no_compensation(
 )
 {
     MxScatterTints scatter_tints = split_scatter_tints(scatter_mode, tint);
-    float material_ior = clamp_dielectric_ior(ior);
     const bool backfacing = !front_facing;
     return MxDielectricNoCompensationBSDF(
         roughness,
-        MxDielectricFresnel(material_ior, backfacing),
+        MxDielectricFresnel(ior, backfacing),
         scatter_tints.reflection,
         scatter_tints.transmission,
         float3(0.0),
@@ -453,11 +461,10 @@ public MxDielectricAiryTurquinAnalyticCompensationBSDF create_mx_dielectric_airy
 )
 {
     MxScatterTints scatter_tints = split_scatter_tints(scatter_mode, tint);
-    float material_ior = clamp_dielectric_ior(ior);
     const bool backfacing = !front_facing;
     return MxDielectricAiryTurquinAnalyticCompensationBSDF(
         roughness,
-        MxDielectricAiryFresnel(material_ior, backfacing, thinfilm_thickness, thinfilm_ior),
+        MxDielectricAiryFresnel(ior, backfacing, thinfilm_thickness, thinfilm_ior),
         scatter_tints.reflection,
         scatter_tints.transmission,
         float3(0.0),
@@ -480,11 +487,10 @@ public MxDielectricAiryNoCompensationBSDF create_mx_dielectric_airy_comp_no_comp
 )
 {
     MxScatterTints scatter_tints = split_scatter_tints(scatter_mode, tint);
-    float material_ior = clamp_dielectric_ior(ior);
     const bool backfacing = !front_facing;
     return MxDielectricAiryNoCompensationBSDF(
         roughness,
-        MxDielectricAiryFresnel(material_ior, backfacing, thinfilm_thickness, thinfilm_ior),
+        MxDielectricAiryFresnel(ior, backfacing, thinfilm_thickness, thinfilm_ior),
         scatter_tints.reflection,
         scatter_tints.transmission,
         float3(0.0),

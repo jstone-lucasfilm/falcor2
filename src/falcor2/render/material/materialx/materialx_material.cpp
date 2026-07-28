@@ -196,6 +196,72 @@ void MaterialXMaterial::require_codegen()
     m_require_codegen = true;
 }
 
+void MaterialXMaterial::require_update()
+{
+    mark_dirty(DirtyFlags::properties);
+}
+
+void MaterialXMaterial::register_editable_properties()
+{
+    m_material_properties.clear();
+    if (!m_codegen_result)
+        return;
+
+    for (auto& param : m_codegen_result->all_material_params.m_params) {
+        if (!param.is_editable)
+            continue;
+
+        // The property name has to match what MxParamInfo::set_value looks up.
+        const std::string property_name = "inputs:" + param.param_name;
+        const std::string label = param.interface.name.empty() ? param.param_name : param.interface.name;
+        const std::string group = param.interface.folders.empty() ? std::string("Params")
+                                                                 : param.interface.folders.back();
+
+        // Textures and matrices are not values an editor or an optimizer sets
+        // this way; MxParamInfo::set_value skips them too.
+        const auto add = [&](auto initial_value)
+        {
+            m_material_properties.add_property<decltype(initial_value)>(
+                property_name,
+                initial_value,
+                false,
+                reflection::on_change(&MaterialXMaterial::require_update),
+                reflection::ui_label(label),
+                reflection::ui_group(group)
+            );
+        };
+
+        switch (param.param_type) {
+        case materialx::params::Type::int_:
+            if (auto* value = param.extract_value<int>())
+                add(*value);
+            break;
+        case materialx::params::Type::bool_:
+            if (auto* value = param.extract_value<bool>())
+                add(*value);
+            break;
+        case materialx::params::Type::float_:
+            if (auto* value = param.extract_value<float>())
+                add(*value);
+            break;
+        case materialx::params::Type::float2_:
+            if (auto* value = param.extract_value<float2>())
+                add(*value);
+            break;
+        case materialx::params::Type::float3_:
+            if (auto* value = param.extract_value<float3>())
+                add(*value);
+            break;
+        case materialx::params::Type::float4_:
+            if (auto* value = param.extract_value<float4>())
+                add(*value);
+            break;
+        default:
+            break;
+        }
+    }
+}
+
 void MaterialXMaterial::validate_device_support() const
 {
     if (!m_scene || !m_scene->device() || m_scene->device()->type() != sgl::DeviceType::cuda)
@@ -480,6 +546,10 @@ void MaterialXMaterial::run_codegen()
 
     // We are generating new code.
     m_codegen_result = materialx::CodeGen::generate(m_codegen_desc);
+
+    // The parameter set belongs to the code that was just generated, so it is
+    // rebuilt here rather than carried over.
+    register_editable_properties();
 }
 
 FALCOR_SCENE_REGISTER_MATERIAL(MaterialXMaterial);

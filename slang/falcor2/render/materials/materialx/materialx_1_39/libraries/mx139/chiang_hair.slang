@@ -321,7 +321,9 @@ public struct MxChiangHairBSDF : ILayerableBSDF
 
     public RoughnessInformation eval_roughness(const float3 wi)
     {
-        return RoughnessInformation((roughness_R + roughness_TT + roughness_TRT) / 3.0, float3(0.0));
+        RoughnessInformation result = RoughnessInformation((roughness_R + roughness_TT + roughness_TRT) / 3.0, float3(0.0));
+        result.kind = k_bsdf_kind_hair;
+        return result;
     }
 
     public float3 directional_albedo(const float3 wi)

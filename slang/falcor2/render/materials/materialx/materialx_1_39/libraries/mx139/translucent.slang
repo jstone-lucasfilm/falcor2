@@ -52,7 +52,9 @@ public struct MxTranslucentBSDF : ILayerableBSDF
     public RoughnessInformation eval_roughness(const float3 wi)
     {
         // Translucent has no roughness control; treat as fully diffuse.
-        return RoughnessInformation(float2(1.0, 1.0), float3(0.0));
+        RoughnessInformation result = RoughnessInformation(float2(1.0, 1.0), float3(0.0));
+        result.kind = k_bsdf_kind_translucent;
+        return result;
     }
 
     public float3 directional_albedo(const float3 wi) { return albedo_value; }

@@ -56,7 +56,9 @@ public struct MxBurleyDiffuseBSDF : ILayerableBSDF
 
     public RoughnessInformation eval_roughness(const float3 wi)
     {
-        return RoughnessInformation(float2(roughness, roughness), float3(0.0));
+        RoughnessInformation result = RoughnessInformation(float2(roughness, roughness), float3(0.0));
+        result.kind = k_bsdf_kind_burley_diffuse;
+        return result;
     }
 
     public float3 directional_albedo(const float3 wi) { return albedo_value; }

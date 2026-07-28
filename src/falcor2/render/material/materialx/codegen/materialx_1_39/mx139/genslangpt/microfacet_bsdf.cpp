@@ -155,9 +155,14 @@ private:
             const std::string ior = input_expr(node, "ior", context);
             const std::string r_tint = scatter_reflection_tint(selection.scatter, tint, scatter_mode);
             const std::string t_tint = scatter_transmission_tint(selection.scatter, tint, scatter_mode);
+            // The raw authored ior goes through: the Fresnel constructors apply
+            // the BSDL boundary clamp internally, and they need the pre-clamp
+            // value to recognize an index-matched (ior = 1) interface. Their
+            // matched test also admits the clamp floor itself, so generated
+            // code from a build predating this change behaves identically.
             if (selection.fresnel == MxFresnelSelection::airy)
                 return fmt::format(
-                    "{type}({rough}, MxDielectricAiryFresnel(clamp_dielectric_ior({ior}), !si.front_facing,"
+                    "{type}({rough}, MxDielectricAiryFresnel({ior}, !si.front_facing,"
                     " {tf_t}, {tf_ior}), {r_tint}, {t_tint}, float3(0.0), !si.front_facing)",
                     fmt::arg("type", type),
                     fmt::arg("rough", rough),
@@ -168,7 +173,7 @@ private:
                     fmt::arg("t_tint", t_tint)
                 );
             return fmt::format(
-                "{type}({rough}, MxDielectricFresnel(clamp_dielectric_ior({ior}), !si.front_facing),"
+                "{type}({rough}, MxDielectricFresnel({ior}, !si.front_facing),"
                 " {r_tint}, {t_tint}, float3(0.0), !si.front_facing)",
                 fmt::arg("type", type),
                 fmt::arg("rough", rough),

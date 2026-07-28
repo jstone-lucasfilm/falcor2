@@ -81,7 +81,13 @@ public struct $MxMaterialName : IMaterial
     )
     {
 #if MATERIALX_PAYLOAD_SIZE > MATERIAL_PAYLOAD_LIMIT
-        let data = data_buffer.load_aligned<$MxMaterialDataName, 16>(0);
+        // An unaligned load rather than load_aligned<..., 16>: the DXIL backend
+        // validates the declared alignment against the buffer's element size,
+        // and a generated material data struct makes no alignment promise (an
+        // editable document with most parameters moved into textures can be as
+        // small as 12 bytes). SPIR-V's pointer path never checked, which is why
+        // this only fails on D3D12. One unvectorized load per instance setup.
+        let data = data_buffer.load<$MxMaterialDataName>(0);
 #endif
         return setup_material_instance(data, si, lod_sampler, hints);
     }

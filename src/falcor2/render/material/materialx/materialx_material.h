@@ -262,8 +262,17 @@ public:
 
 private:
     void require_codegen();
+    /// Mark the material for a data-buffer refresh, without regenerating code.
+    /// Used by editable parameters, whose values live in the data buffer.
+    void require_update();
     void validate_device_support() const;
     void run_codegen();
+    /// Expose the generated editable parameters as dynamic properties, so their
+    /// values can be changed after codegen. Without this the parameters exist in
+    /// the generated code but nothing can reach them: MxParamInfo::set_value
+    /// looks each one up in m_material_properties by name and silently does
+    /// nothing when it is absent.
+    void register_editable_properties();
     detail::PropertyList mtlx_geomprop_names_property() const;
     void set_mtlx_geomprop_names_property(const detail::PropertyList& value);
     detail::PropertyList mtlx_geomprop_ids_property() const;

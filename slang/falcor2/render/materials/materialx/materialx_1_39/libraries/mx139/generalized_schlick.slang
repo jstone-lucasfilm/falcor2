@@ -76,8 +76,15 @@ public struct MxCompensatedGeneralizedSchlickBSDF<
         float3 reflection;
         float3 transmission;
         if (!dorefr()) {
-            reflection = reflection_tint * (1.0 - E_ms);
-            transmission = float3(E_ms);
+            // The reflection-only transmission is the layer pass-through the
+            // generated bsdf_mix code reads, so it must obey the layering
+            // invariant: built from the F0/F90 that define this lobe's
+            // reflectance, not from the eta-keyed energy tables, and reduced
+            // to the achromatic scalar mean of genglsl's avgDirAlbedo -- an
+            // artistic tint's colour is absorption, not pass-through.
+            const float3 dir_albedo = layer_directional_albedo(wi);
+            reflection = reflection_tint * dir_albedo;
+            transmission = float3(1.0 - dot(dir_albedo, float3(1.0 / 3.0)));
         } else {
             const float3 F = fresnel.eval(abs(wi.z));
             reflection = F * (1.0 - E_ms) * reflection_tint;
@@ -96,17 +103,32 @@ public struct MxCompensatedGeneralizedSchlickBSDF<
 
     public RoughnessInformation eval_roughness(const float3 wi)
     {
-        return RoughnessInformation(roughness_xy, float3(0.0));
+        RoughnessInformation result = RoughnessInformation(roughness_xy, float3(0.0));
+        result.kind = k_bsdf_kind_generalized_schlick;
+        return result;
     }
 
     public float3 directional_albedo(const float3 wi)
     {
-        return !dorefr() ? reflection_tint * (1.0 - layer_energy(wi)) : float3(1.0);
+        return !dorefr() ? reflection_tint * layer_directional_albedo(wi) : float3(1.0);
     }
 
+    // The layering invariant: what this lobe does not reflect it hands down, so
+    // its opacity is its own directional albedo -- built from the F0/F90 that
+    // define its reflectance, not from the derived eta the energy tables key on
+    // (a dielectric model that never consults the Schlick colours, under which
+    // a lobe reflecting nothing still occluded everything beneath it). The
+    // reduction to a scalar mean and the exclusion of reflection_tint both
+    // match genglsl's avgDirAlbedo: transmittance is the untinted unreflected
+    // share, so an artistic tint's colour is absorption, not pass-through.
+    // eval_albedo's reflection-only transmission is 1 minus this same scalar,
+    // because the generated bsdf_mix layering reads the pass-through from
+    // there rather than from this method.
     public float3 layer_opacity(const float3 wi)
     {
-        return dorefr() ? float3(1.0) : saturate(float3(1.0) - float3(layer_energy(wi)));
+        if (dorefr())
+            return float3(1.0);
+        return saturate(float3(dot(layer_directional_albedo(wi), float3(1.0 / 3.0))));
     }
 
     public property float3 ior_as_reflectance
@@ -121,6 +143,11 @@ public struct MxCompensatedGeneralizedSchlickBSDF<
     private bool dorefl() { return TScatter::dorefl(reflection_tint); }
 
     private bool dorefr() { return TScatter::dorefr(transmission_tint); }
+
+    private float3 layer_directional_albedo(const float3 wi)
+    {
+        return fresnel.layer_directional_albedo(abs(wi.z), microfacet_average_alpha(roughness_xy));
+    }
 
     private float layer_energy(float3 wi)
     {

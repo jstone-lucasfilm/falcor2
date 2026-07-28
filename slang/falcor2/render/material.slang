@@ -216,6 +216,12 @@ public struct ExtraBsdfProperties
     public float3 bsdf_weight[max_bsdf_count] = {};    ///< Weight for the given BSDF
     public float2 bsdf_roughness[max_bsdf_count] = {}; ///< Anisotropic roughness
     public float3 bsdf_scratch[max_bsdf_count] = {};   ///< Scratch direction and depth
+    public float3 bsdf_extinction[max_bsdf_count] = {}; ///< Conductor extinction k, zero for non-conductors
+    public float3 bsdf_ior[max_bsdf_count] = {};       ///< Conductor refractive index n, zero for non-conductors
+    public float3 bsdf_transmission[max_bsdf_count] = {}; ///< Through-material transmission albedo, zero for opaque
+                                                          ///< leaves; a reflection-only layer's pass-through share is
+                                                          ///< NOT reported here (bsdf_albedo stays reflection-only)
+    public float bsdf_kind[max_bsdf_count] = {};       ///< Leaf closure kind (a ``k_bsdf_kind_*`` value; 0 = unreported)
     public float bsdf_index[max_bsdf_count] = {};      ///< A BSDF index, e.g. to differentiate between different MERL
                                                        ///< materials.
 

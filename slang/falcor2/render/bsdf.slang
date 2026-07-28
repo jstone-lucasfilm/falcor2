@@ -125,22 +125,76 @@ AlbedoContributions operator*(const float f, const AlbedoContributions b)
     return AlbedoContributions(f * b.reflection, f * b.absorption_r, f * b.transmission, f * b.absorption_t);
 }
 
+/// Leaf closure kinds for the property stream's kind row. Small integers exact
+/// in half precision; 0 stays "unreported" so aggregates, forwarding wrappers
+/// and non-MaterialX materials report nothing rather than something false.
+/// Reported for property extraction only; nothing in transport reads a kind.
+public static const float k_bsdf_kind_none = 0.f;
+public static const float k_bsdf_kind_conductor = 1.f;
+public static const float k_bsdf_kind_dielectric = 2.f;
+public static const float k_bsdf_kind_oren_nayar_diffuse = 3.f;
+public static const float k_bsdf_kind_burley_diffuse = 4.f;
+public static const float k_bsdf_kind_sheen = 5.f;
+public static const float k_bsdf_kind_generalized_schlick = 6.f;
+public static const float k_bsdf_kind_translucent = 7.f;
+public static const float k_bsdf_kind_subsurface = 8.f;
+public static const float k_bsdf_kind_hair = 9.f;
+
 public struct RoughnessInformation
 {
     /// The (mostly meaningless) non-universal roughness of the BSDF.
     public float2 roughness;
     public float3 scratch;
+    /// Extinction coefficient k, for conductors, zero otherwise. Reported for
+    /// property extraction only; nothing in transport reads it.
+    public float3 extinction;
+    /// Refractive index n of the same complex IOR, zero for non-conductors.
+    /// Reported beside k for the same reason and read by nothing in transport:
+    /// (F0, k) alone determines n only up to a two-root quadratic whose branch
+    /// has to be chosen by a physical argument, and reporting n retires that
+    /// ambiguity outright.
+    public float3 ior;
+    /// Which leaf closure reported these quantities (a ``k_bsdf_kind_*``
+    /// value), so a consumer no longer infers the kind from a discriminator
+    /// constant in the roughness itself. Set by each leaf's own
+    /// ``eval_roughness``; every constructor defaults it to "none" so
+    /// aggregates and wrappers cannot claim a kind by accident.
+    public float kind;
 
     public __init()
     {
         roughness = float2(0.f);
         scratch = float3(0.f);
+        extinction = float3(0.f);
+        ior = float3(0.f);
+        kind = k_bsdf_kind_none;
     }
 
     public __init(float2 roughness, float3 scratch)
     {
         this.roughness = roughness;
         this.scratch = scratch;
+        this.extinction = float3(0.f);
+        this.ior = float3(0.f);
+        this.kind = k_bsdf_kind_none;
+    }
+
+    public __init(float2 roughness, float3 scratch, float3 extinction)
+    {
+        this.roughness = roughness;
+        this.scratch = scratch;
+        this.extinction = extinction;
+        this.ior = float3(0.f);
+        this.kind = k_bsdf_kind_none;
+    }
+
+    public __init(float2 roughness, float3 scratch, float3 extinction, float3 ior)
+    {
+        this.roughness = roughness;
+        this.scratch = scratch;
+        this.extinction = extinction;
+        this.ior = ior;
+        this.kind = k_bsdf_kind_none;
     }
 }
 

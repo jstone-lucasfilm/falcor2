@@ -60,7 +60,11 @@ public struct MxCompensatedConductorBSDF<
 
     public RoughnessInformation eval_roughness(const float3 wi)
     {
-        return RoughnessInformation(roughness_xy, float3(0.0));
+        RoughnessInformation result = RoughnessInformation(
+            roughness_xy, float3(0.0), fresnel.extinction_coefficient(), fresnel.index_of_refraction()
+        );
+        result.kind = k_bsdf_kind_conductor;
+        return result;
     }
 
     // Conductor's directional albedo is the BSDL average Fresnel for legacy

@@ -136,10 +136,20 @@ public extension<Inner> mx139::MxFramedWeightedBSDF<Inner> : mx139::IMxExtraBsdf
         result.bsdf_N[bsdf_index] = this.frame.normal;
         result.bsdf_T[bsdf_index] = this.frame.tangent;
         result.bsdf_B[bsdf_index] = this.frame.bitangent;
-        result.bsdf_albedo[bsdf_index] = albedo.reflection + this.material_transmission * albedo.transmission;
+        // Reflection and through-material transmission travel as separate rows:
+        // folding transmitted energy into the albedo made an RT dielectric's
+        // reflection interface unreadable (an F0 inversion saw ~1.0 where the
+        // interface reflects ~0.04). ``material_transmission`` gates the new row
+        // because for a reflection-only leaf ``albedo.transmission`` is the
+        // layer pass-through share, not light leaving the material.
+        result.bsdf_albedo[bsdf_index] = albedo.reflection;
+        result.bsdf_transmission[bsdf_index] = this.material_transmission * albedo.transmission;
         result.bsdf_weight[bsdf_index] += ctx.closure_weight * this.weight;
         result.bsdf_roughness[bsdf_index] = roughness.roughness;
         result.bsdf_scratch[bsdf_index] = roughness.scratch;
+        result.bsdf_extinction[bsdf_index] = roughness.extinction;
+        result.bsdf_ior[bsdf_index] = roughness.ior;
+        result.bsdf_kind[bsdf_index] = roughness.kind;
 
         return saturate(this.weight * this.inner.layer_opacity(local_wi));
     }
