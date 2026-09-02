@@ -28,8 +28,14 @@ float3 bsdl_visible_normal(float3 normal_ws)
     // BSDL repairs each lobe frame with BsdfGlobals::visible_normal(wo, Ngf, N).
     // Keep this policy isolated so the 1.38-style bend-normal diagnostic can be
     // switched without hiding policy branches inside individual BSDF helpers.
+    // BSDL's visible_normal receives globals flipped to the viewer's side on
+    // backfacing hits (the OSL convention, matched by the wrapper's oriented
+    // shading frame). The geometric normal must be oriented here because it
+    // comes from `si.normal_ws`, which the orientation does not touch; the
+    // lobe normal must NOT be, because `Nworld` binds to the oriented frame's
+    // normal, so the document's whole normal chain already follows it.
     const float3 wo = normalize(si.shading_frame_ws.to_local(si.wi_ws));
-    const float3 ng = normalize(si.shading_frame_ws.to_local(si.normal_ws));
+    const float3 ng = normalize(si.shading_frame_ws.to_local(si.front_normal_ws()));
     const float3 n = normalize(si.shading_frame_ws.to_local(normal_ws));
     if (dot(wo, n) > 0.0)
         return n;

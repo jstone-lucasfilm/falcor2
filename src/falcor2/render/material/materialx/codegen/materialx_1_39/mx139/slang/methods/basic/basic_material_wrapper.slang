@@ -62,8 +62,17 @@ public struct $MxMaterialName : IMaterial
         typealias Graph = $MxGraphName<TLodSampler>;
         MaterialInstance result = {};
         result.shading_frame_ws = si.shading_frame_ws;
+        // The MX139 lobes are BSDL transcriptions, and BSDL's contract is
+        // directions expressed in a frame oriented toward the viewer, with
+        // `backfacing` carrying the eta inversion. Mirror the interpolated
+        // frame on backfacing hits (the orient_shading_frame precedent in
+        // standard_material_common.slang); without this, an exit refraction
+        // presents wi below every lobe's hemisphere and cannot sample.
+        if (!si.front_facing) {
+            result.shading_frame_ws.normal = -result.shading_frame_ws.normal;
+        }
         if (hints & MaterialInstanceHints::adjust_shading_normal) {
-            adjust_shading_normal(result.shading_frame_ws, si.normal_ws, si.wi_ws);
+            adjust_shading_normal(result.shading_frame_ws, si.front_normal_ws(), si.wi_ws);
         }
         SurfaceInteraction graph_si = si;
         graph_si.shading_frame_ws = result.shading_frame_ws;

@@ -160,6 +160,20 @@ public MxGGXDist make_ggx_dist(float2 roughness_xy)
     return MxGGXDist(microfacet_clamped_roughness_xy(roughness_xy));
 }
 
+// Sample count for the fixed-pattern directional-albedo estimate a layer's
+// reflection-only dielectric top uses for its opacity (dielectric.slang,
+// reflection_albedo_estimate). Enough that the total-internal-reflection edge
+// on a backfacing hit is resolved smoothly across the critical angle rather
+// than in steps; the estimate is evaluated once per layer per hit.
+public static const uint LAYER_ALBEDO_SAMPLES = 32;
+
+// Hammersley point i of n: stratified in the first coordinate, the base-2
+// radical inverse in the second.
+public float2 hammersley_2d(uint i, uint n)
+{
+    return float2((float(i) + 0.5) / float(n), float(reversebits(i)) * 2.3283064365386963e-10);
+}
+
 public float mini_microfacet_get_cosine(int i)
 {
     const float x = float(i) * (1.0 / float(MINI_MICROFACET_GGX_NC - 1));
