@@ -3,15 +3,16 @@
 
 #pragma once
 
+#include <MaterialXCore/Generated.h>
+
 #include "falcor2/core/macros.h"
 
 #include <cstdint>
 
-namespace MaterialX_v1_39_5 {
+MATERIALX_NAMESPACE_BEGIN
 class ShaderGraph;
 class GenContext;
-} // namespace MaterialX_v1_39_5
-namespace MaterialX = MaterialX_v1_39_5;
+MATERIALX_NAMESPACE_END
 
 namespace falcor {
 namespace mtlx {

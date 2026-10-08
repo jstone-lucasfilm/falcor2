@@ -21,6 +21,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace falcor {
 namespace mtlx {
@@ -59,12 +60,33 @@ public:
 
         const mx::ShaderGenerator& shadergen = context.getShaderGenerator();
         const std::string output_var = output->getVariable();
-        const std::string weight = input_expr(node, "weight", context);
+        std::string weight = input_expr(node, "weight", context);
         const std::string normal = input_expr(node, "normal", context);
         const std::string tangent = input_expr(node, "tangent", context);
-        const std::string bsdf_expr = bsdf_constructor_expr(node, context, *user_data->inputs.desc);
-
+        // The BSDF index is taken before the constructor reads it, so a
+        // per-instance verdict can test it (transmission_continues_to_base).
         shadergen.emitLine(output_var + ".set_bsdf(mx_stack_next_bsdf++)", stage);
+        const TransmissionContinues continues
+            = transmission_continues_to_base(*user_data, node, output_var + ".get_index()");
+        const std::string bsdf_expr = bsdf_constructor_expr(node, context, *user_data->inputs.desc, continues);
+        if (continues.any) {
+            // A transmission-only leaf over a BSDF base is pass-through and
+            // nothing else, so it is emitted at weight 0: its layer opacity is
+            // then 0 on both layering paths and the base receives everything,
+            // which a leaf with no lobe at all would not give (bsdf_mix would read
+            // its zero transmission as full opacity). An RT leaf keeps its weight
+            // and loses only its transmission tint (bsdf_constructor_expr).
+            const MxMicrofacetSelection selection = microfacet_selection(*user_data, node, *user_data->inputs.desc);
+            const std::string scatter_mode = input_expr(node, "scatter_mode", context);
+            std::string coat_weight = weight;
+            if (selection.scatter == MxScatterSelection::static_t)
+                coat_weight = "0.0";
+            else if (selection.scatter == MxScatterSelection::runtime)
+                coat_weight = "((" + scatter_mode + ") == 1 ? 0.0 : " + weight + ")";
+            weight
+                = continues.all ? coat_weight : "(" + continues.condition + " ? " + coat_weight + " : " + weight + ")";
+        }
+
         shadergen.emitLine("mx_stack.bsdf_weights[" + output_var + ".get_index()] = float3(" + weight + ")", stage);
         shadergen.emitLine("mx_stack.set_bsdf(" + output_var + ".get_index(), " + bsdf_expr + ")", stage);
         shadergen.emitLine("direct_prepare_bsdf(" + output_var + ", " + normal + ", " + tangent + ")", stage);
@@ -119,6 +141,74 @@ private:
         FALCOR_UNREACHABLE();
     }
 
+    // Whether the layering analysis placed this node's transmission over another
+    // BSDF: a transmissive lobe in the top branch of a layer whose base is a BSDF.
+    // The specification's layering model passes such a lobe's transmission to the
+    // base, which every layer combiner already does through the top's
+    // layer_opacity (1 - E_R of its reflection lobes); the lobe itself therefore
+    // contributes no BTDF of its own. Emitting one as well transmitted the same
+    // light twice: once to the base as pass-through, and once through the
+    // surface into the object, which a path tracer then follows through closed
+    // geometry. Every LamaDielectric coat is this case.
+    //
+    // The verdict belongs to each *instance* of the node, not to the node: a
+    // nodegraph used twice (two LamaDielectrics, say) is emitted as one shared
+    // function whose ShaderNode both instances report, and one instance can be a
+    // coat while the other is the glass beneath it. Taking the first instance's
+    // verdict for both zeroed the transmission of a LamaDielectric layered under
+    // another (a dielectric film over a dielectric glass: the glass's transmission
+    // leaf at weight 0, against 0.96 with the same film built from plain nodes).
+    // Instances are told apart at runtime by their BSDF index, which follows the
+    // layering order exactly as set_bsdf's per-index cases already rely on.
+    struct TransmissionContinues {
+        // Expression true where this instance's transmission continues to a base:
+        // a literal when every instance agrees, else a test on the BSDF index.
+        std::string condition;
+        bool any = false;
+        bool all = false;
+    };
+
+    TransmissionContinues transmission_continues_to_base(
+        const CodegenUserData& user_data,
+        const mx::ShaderNode& node,
+        const std::string& index
+    ) const
+    {
+        std::vector<size_t> continuing;
+        size_t instances = 0;
+        const std::vector<LayeringDesc::BsdfDesc>& bsdfs = user_data.analysis.layering.bsdfs;
+        for (size_t i = 0; i < bsdfs.size(); ++i) {
+            if (bsdfs[i].shader_node != &node)
+                continue;
+            ++instances;
+            if (bsdfs[i].transmissive && !bsdfs[i].through_material_transmissive)
+                continuing.push_back(i);
+        }
+        TransmissionContinues result;
+        result.any = !continuing.empty();
+        result.all = result.any && continuing.size() == instances;
+        if (!result.any || result.all) {
+            result.condition = result.all ? "true" : "false";
+            return result;
+        }
+        for (size_t i = 0; i < continuing.size(); ++i)
+            result.condition += fmt::format("{}({} == {})", i == 0 ? "(" : " || ", index, continuing[i]);
+        result.condition += ")";
+        return result;
+    }
+
+    // The transmission tint an instance is constructed with: zero where its
+    // transmission continues to a base, the authored tint where it leaves the
+    // material, and a runtime choice where the shared function serves both.
+    static std::string continuing_transmission_tint(const TransmissionContinues& continues, const std::string& tint)
+    {
+        if (!continues.any)
+            return tint;
+        if (continues.all)
+            return "float3(0.0)";
+        return "(" + continues.condition + " ? float3(0.0) : " + tint + ")";
+    }
+
     std::optional<MxMicrofacetSelection>
     cached_microfacet_selection(const CodegenUserData& user_data, const mx::ShaderNode& node) const
     {
@@ -139,7 +229,8 @@ private:
         const mx::ShaderNode& node,
         mx::GenContext& context,
         const CodeGenDesc& desc,
-        MxMicrofacetSelection selection
+        MxMicrofacetSelection selection,
+        const TransmissionContinues& transmission_continues
     ) const
     {
         const std::string type = microfacet_bsdf_type(desc, selection);
@@ -154,10 +245,18 @@ private:
             const std::string scatter_mode = input_expr(node, "scatter_mode", context);
             const std::string ior = input_expr(node, "ior", context);
             const std::string r_tint = scatter_reflection_tint(selection.scatter, tint, scatter_mode);
-            const std::string t_tint = scatter_transmission_tint(selection.scatter, tint, scatter_mode);
+            const std::string t_tint = continuing_transmission_tint(
+                transmission_continues,
+                scatter_transmission_tint(selection.scatter, tint, scatter_mode)
+            );
+            // The raw authored ior goes through: the Fresnel constructors apply
+            // the BSDL boundary clamp internally, and they need the pre-clamp
+            // value to recognize an index-matched (ior = 1) interface. Their
+            // matched test also admits the clamp floor itself, so generated
+            // code from a build predating this change behaves identically.
             if (selection.fresnel == MxFresnelSelection::airy)
                 return fmt::format(
-                    "{type}({rough}, MxDielectricAiryFresnel(clamp_dielectric_ior({ior}), !si.front_facing,"
+                    "{type}({rough}, MxDielectricAiryFresnel({ior}, !si.front_facing,"
                     " {tf_t}, {tf_ior}), {r_tint}, {t_tint}, float3(0.0), {retroreflective}, !si.front_facing)",
                     fmt::arg("type", type),
                     fmt::arg("rough", rough),
@@ -169,7 +268,7 @@ private:
                     fmt::arg("retroreflective", retroreflective)
                 );
             return fmt::format(
-                "{type}({rough}, MxDielectricFresnel(clamp_dielectric_ior({ior}), !si.front_facing),"
+                "{type}({rough}, MxDielectricFresnel({ior}, !si.front_facing),"
                 " {r_tint}, {t_tint}, float3(0.0), {retroreflective}, !si.front_facing)",
                 fmt::arg("type", type),
                 fmt::arg("rough", rough),
@@ -209,7 +308,10 @@ private:
             const std::string color90 = input_expr(node, "color90", context);
             const std::string exponent = input_expr(node, "exponent", context);
             const std::string r_tint = scatter_reflection_tint(selection.scatter, "float3(1.0)", scatter_mode);
-            const std::string t_tint = scatter_transmission_tint(selection.scatter, "float3(1.0)", scatter_mode);
+            const std::string t_tint = continuing_transmission_tint(
+                transmission_continues,
+                scatter_transmission_tint(selection.scatter, "float3(1.0)", scatter_mode)
+            );
             if (selection.fresnel == MxFresnelSelection::airy)
                 return fmt::format(
                     "{type}({rough}, make_schlick_airy_fresnel({color0}, {color82}, {color90}, {exponent},"
@@ -260,15 +362,26 @@ private:
         FALCOR_UNREACHABLE();
     }
 
-    std::string
-    bsdf_constructor_expr(const mx::ShaderNode& node, mx::GenContext& context, const CodeGenDesc& desc) const
+    MxMicrofacetSelection
+    microfacet_selection(const CodegenUserData& user_data, const mx::ShaderNode& node, const CodeGenDesc& desc) const
+    {
+        std::optional<MxMicrofacetSelection> cached = cached_microfacet_selection(user_data, node);
+        return cached ? *cached : select_microfacet(desc, node.getImplementation().getName(), &node);
+    }
+
+    std::string bsdf_constructor_expr(
+        const mx::ShaderNode& node,
+        mx::GenContext& context,
+        const CodeGenDesc& desc,
+        const TransmissionContinues& transmission_continues
+    ) const
     {
         auto user_data = context.getUserData<CodegenUserData>("mtlx");
         std::optional<MxMicrofacetSelection> cached
             = user_data ? cached_microfacet_selection(*user_data, node) : std::optional<MxMicrofacetSelection>{};
         MxMicrofacetSelection selection
             = cached ? *cached : select_microfacet(desc, node.getImplementation().getName(), &node);
-        return direct_constructor_expr(node, context, desc, selection);
+        return direct_constructor_expr(node, context, desc, selection, transmission_continues);
     }
 
     MxMicrofacetKind m_kind = MxMicrofacetKind::none;

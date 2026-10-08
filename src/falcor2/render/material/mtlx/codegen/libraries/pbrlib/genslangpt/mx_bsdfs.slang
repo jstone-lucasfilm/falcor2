@@ -121,8 +121,8 @@ void mx_subsurface_bsdf(
 {
     bsdf.set_bsdf(mx_stack_next_bsdf++);
     mx_stack.bsdf_weights[bsdf.get_index()] = float3(weight);
-    // MTLX maps MaterialX subsurface to a diffuse reflection fallback.
-    mx_stack.set_bsdf(bsdf.get_index(), create_mx_subsurface_diffuse_fallback(color));
+    // A path-traced subsurface lobe, the diffuse lobe of its colour at a zero radius.
+    mx_stack.set_bsdf(bsdf.get_index(), create_mx_subsurface(color, radius, anisotropy));
     mx_prepare_subsurface_diffuse_fallback_bsdf(bsdf, normal);
 }
 

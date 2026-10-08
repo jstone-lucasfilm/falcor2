@@ -110,7 +110,18 @@ public struct MxTurquinAnalyticMicrofacetCompensation : IMxMicrofacetCompensatio
     [ForceInline]
     public static float3 reflection_scale(float roughness, float cos_theta, float3 fresnel)
     {
-        return turquin_analytic_reflection_scale(abs(cos_theta), roughness, fresnel);
+        // Every reflection_scale call site passes microfacet_roughness()'s BSDL
+        // sqrt convention (the tabulated-energy-curve parameterization), while
+        // ggx_directional_albedo_analytic expects the MaterialX alpha the raster
+        // implementation feeds it. Convert here: squaring the BSDL roughness
+        // recovers the lobe alpha exactly for isotropic lobes (and the BSDL
+        // scalarization ax / (1 + aniso) for anisotropic ones). Without this
+        // conversion the fit is evaluated one square root away from the lobe,
+        // over-compensating every microfacet reflection by an alpha-dependent
+        // factor measured at 1.02-1.18x over alpha 0.01-0.25 -- energy the
+        // white furnace shows being created, against the specification's own
+        // "expected to preserve energy" language on the microfacet BSDF nodes.
+        return turquin_analytic_reflection_scale(abs(cos_theta), roughness * roughness, fresnel);
     }
 };
 

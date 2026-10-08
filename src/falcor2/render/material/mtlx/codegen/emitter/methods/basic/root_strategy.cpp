@@ -214,16 +214,20 @@ std::string build_closure_tree_collect_extra_text(const LayeringDesc& layering, 
         body_lines += ";\n";
     };
 
+    // Rows are the BSDFs' property slots, which skip the leaves with nothing to
+    // report (extra_bsdf_property_slots), so a visit maps to its BSDF's slot or to
+    // -1. A leaf shared by several branches is visited once per branch and
+    // accumulates its weight in its one slot. The table holds max_leaf_visits;
+    // where a tree has more visits, those past it fall back to slot = visit order
+    // in the collector (so bsdf_count reports the overflow, as before).
+    const std::vector<int> slots = extra_bsdf_property_slots(layering);
+    const std::size_t max_leaf_visits = 4 * k_extra_bsdf_properties_max_bsdf_count;
     append("ctx.leaf_visit_index = 0");
-    for (std::size_t leaf_visit_index = 0; leaf_visit_index < leaf_visit_to_bsdf_index.size(); ++leaf_visit_index) {
-        if (leaf_visit_index >= k_extra_bsdf_properties_max_bsdf_count)
-            break;
-        const std::size_t bsdf_index = leaf_visit_to_bsdf_index.size() > k_extra_bsdf_properties_max_bsdf_count
-            ? leaf_visit_index
-            : leaf_visit_to_bsdf_index[leaf_visit_index];
-        append(
-            "ctx.leaf_visit_to_bsdf_index[" + std::to_string(leaf_visit_index) + "] = " + std::to_string(bsdf_index)
-        );
+    for (std::size_t leaf_visit_index = 0;
+         leaf_visit_index < std::min(leaf_visit_to_bsdf_index.size(), max_leaf_visits);
+         ++leaf_visit_index) {
+        const int slot = slots[leaf_visit_to_bsdf_index[leaf_visit_index]];
+        append("ctx.leaf_visit_to_bsdf_index[" + std::to_string(leaf_visit_index) + "] = " + std::to_string(slot));
     }
     append("bsdf.collect_extra_bsdf_properties(result, reported_count, ctx)");
     return body_lines;

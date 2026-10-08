@@ -268,9 +268,18 @@ public bool intersect_procedural_lss(
 )
 {
     t = {};
+    // The object-space direction is the world direction through the inverse instance
+    // transform, so under a scaled instance (a centimetre stage's 0.01 root scale) it is
+    // not unit length, while the intersection requires a unit direction: its push
+    // toward the segment measures distance along the direction, and a direction of
+    // length 100 pushes the ray past every segment. Intersect along the unit
+    // direction and convert the distance back to the ray parameter.
+    const float dir_length = length(ray_dir);
     float2 result;
-    if (intersect_ray_linear_swept_sphere_han19(ray_origin, ray_dir, segment[0], segment[1], true, result)) {
-        t = result.x;
+    if (intersect_ray_linear_swept_sphere_han19(
+            ray_origin, ray_dir / dir_length, segment[0], segment[1], true, result
+        )) {
+        t = result.x / dir_length;
         return t >= t_min && t <= t_max;
     }
     return false;

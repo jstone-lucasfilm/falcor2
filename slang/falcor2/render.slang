@@ -22,6 +22,7 @@ __include "render/material_system.slang";
 __include "render/material.slang";
 __include "render/phase_function.slang";
 __include "render/scene_types.slang";
+__include "render/subsurface_walk.slang";
 __include "render/scene.slang";
 __include "render/slang_compat.slang";
 __include "render/texture_manager_types.slang";

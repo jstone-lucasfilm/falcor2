@@ -14,17 +14,23 @@ public struct MxExtraBsdfPropertiesContext
     public float3 wi_adjusted;
     // Accumulated closure weight from the root to the current leaf.
     public float3 closure_weight;
+    // Leaf visits the table maps. Visits outnumber slots for two reasons: the
+    // leaves with nothing to report (one per LamaDielectric) take none, and a
+    // leaf shared by several branches (the base under a stack of coats) is
+    // visited once per branch into its one slot. Each entry is one int.
+    public static const int max_leaf_visits = 4 * ExtraBsdfProperties::max_bsdf_count;
     // Current leaf visit during recursive closure_tree reporting.
     public int leaf_visit_index;
-    // Maps recursive leaf visit order to result BSDF slot indices.
-    public int leaf_visit_to_bsdf_index[ExtraBsdfProperties::max_bsdf_count];
+    // Maps recursive leaf visit order to result BSDF slot indices; -1 for a leaf
+    // that reports nothing and takes no slot.
+    public int leaf_visit_to_bsdf_index[max_leaf_visits];
 
     public __init()
     {
         wi_adjusted = float3(0.0);
         closure_weight = float3(1.0);
         leaf_visit_index = 0;
-        for (int i = 0; i < ExtraBsdfProperties::max_bsdf_count; ++i)
+        for (int i = 0; i < max_leaf_visits; ++i)
             leaf_visit_to_bsdf_index[i] = i;
     }
 }
@@ -37,6 +43,13 @@ public interface IMxExtraBsdfPropertiesCollector : ILayerableBSDF
         inout MxExtraBsdfPropertiesContext ctx
     );
 };
+
+// The property stream's albedo query: normal incidence in the leaf's own frame,
+// on the side the shared query arrives from, so a backfacing hit keeps its sign.
+public float3 mx_normal_incidence_wi(const float3 local_wi)
+{
+    return float3(0.0, 0.0, local_wi.z < 0.0 ? -1.0 : 1.0);
+}
 
 // This recursive material-property traversal is only used by closure_tree.
 // The flat bsdf_mix root emits its own leaf loop during codegen.
@@ -123,23 +136,45 @@ public extension<Inner> mtlx::MxFramedWeightedBSDF<Inner> : mtlx::IMxExtraBsdfPr
     )
     {
         const int leaf_visit_index = ctx.leaf_visit_index++;
-        const int bsdf_index = leaf_visit_index < ExtraBsdfProperties::max_bsdf_count
+        const int bsdf_index = leaf_visit_index < mtlx::MxExtraBsdfPropertiesContext::max_leaf_visits
             ? ctx.leaf_visit_to_bsdf_index[leaf_visit_index]
             : leaf_visit_index;
         const float3 local_wi = this.frame.to_local(ctx.wi_adjusted);
+        // A leaf with nothing to report takes no slot, but still passes its share
+        // of the light to the leaves beneath.
+        if (bsdf_index < 0)
+            return saturate(this.weight * this.inner.layer_opacity(local_wi));
         reported_count = max(reported_count, bsdf_index + 1);
         if (bsdf_index >= ExtraBsdfProperties::max_bsdf_count)
             return saturate(this.weight * this.inner.layer_opacity(local_wi));
 
-        AlbedoContributions albedo = this.inner.eval_albedo(local_wi);
+        // The albedo rows are the leaf's normal-incidence reflectance, so they are
+        // queried along the leaf's *own* normal. Localizing the shared query into a
+        // frame a normal map has tilted reported the Fresnel at the tilt angle
+        // instead (0.053 against an F0 of 0.017 at 60 degrees, IOR 1.3), which a
+        // consumer reading F0 per texel takes as a brighter interface wherever
+        // the bump is steep. The weight's pass-through (layer_opacity below)
+        // stays on the real query: it is how much light reaches the base, not a
+        // property of the interface.
+        AlbedoContributions albedo = this.inner.eval_albedo(mtlx::mx_normal_incidence_wi(local_wi));
         RoughnessInformation roughness = this.inner.eval_roughness(local_wi);
         result.bsdf_N[bsdf_index] = this.frame.normal;
         result.bsdf_T[bsdf_index] = this.frame.tangent;
         result.bsdf_B[bsdf_index] = this.frame.bitangent;
-        result.bsdf_albedo[bsdf_index] = albedo.reflection + this.material_transmission * albedo.transmission;
+        // Reflection and through-material transmission travel as separate rows:
+        // folding transmitted energy into the albedo made an RT dielectric's
+        // reflection interface unreadable (an F0 inversion saw ~1.0 where the
+        // interface reflects ~0.04). ``material_transmission`` gates the new row
+        // because for a reflection-only leaf ``albedo.transmission`` is the
+        // layer pass-through share, not light leaving the material.
+        result.bsdf_albedo[bsdf_index] = albedo.reflection;
+        result.bsdf_transmission[bsdf_index] = this.material_transmission * albedo.transmission;
         result.bsdf_weight[bsdf_index] += ctx.closure_weight * this.weight;
         result.bsdf_roughness[bsdf_index] = roughness.roughness;
         result.bsdf_scratch[bsdf_index] = roughness.scratch;
+        result.bsdf_extinction[bsdf_index] = roughness.extinction;
+        result.bsdf_ior[bsdf_index] = roughness.ior;
+        result.bsdf_kind[bsdf_index] = roughness.kind;
 
         return saturate(this.weight * this.inner.layer_opacity(local_wi));
     }
@@ -158,11 +193,14 @@ public extension<Top, Base> mtlx::MxLayerBSDF<Top, Base> : mtlx::IMxExtraBsdfPro
     )
     {
         const float3 top_opacity = this.top.collect_extra_bsdf_properties(result, reported_count, ctx);
-        const float3 saved_closure_weight
-            = mtlx::mx_push_extra_closure_weight(ctx, saturate(float3(1.0) - top_opacity));
+        const float3 base_scale = saturate(float3(1.0) - top_opacity);
+        const float3 saved_closure_weight = mtlx::mx_push_extra_closure_weight(ctx, base_scale);
         const float3 base_opacity = this.base.collect_extra_bsdf_properties(result, reported_count, ctx);
         mtlx::mx_pop_extra_closure_weight(ctx, saved_closure_weight);
-        return base_opacity;
+        // The layer's own opacity composes by the specification's transmittance
+        // product (MxLayerBSDF::layer_opacity), so a nested top keeps occluding
+        // what lies beneath the outer layer.
+        return saturate(top_opacity + base_scale * base_opacity);
     }
 }
 
@@ -262,11 +300,11 @@ public extension<Top, Base> mtlx::MxLayerBSDF<Top, Base> : mtlx::IMxMaterialProp
     )
     {
         const float3 top_opacity = this.top.collect_material_properties(result, roughness_norm, guide_normal, ctx);
-        const float3 saved_closure_weight
-            = mtlx::mx_push_extra_closure_weight(ctx, saturate(float3(1.0) - top_opacity));
+        const float3 base_scale = saturate(float3(1.0) - top_opacity);
+        const float3 saved_closure_weight = mtlx::mx_push_extra_closure_weight(ctx, base_scale);
         const float3 base_opacity = this.base.collect_material_properties(result, roughness_norm, guide_normal, ctx);
         mtlx::mx_pop_extra_closure_weight(ctx, saved_closure_weight);
-        return base_opacity;
+        return saturate(top_opacity + base_scale * base_opacity);
     }
 }
 
