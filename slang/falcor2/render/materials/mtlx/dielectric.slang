@@ -98,8 +98,15 @@ public struct MxCompensatedDielectricBSDF<
         float3 reflection;
         float3 transmission;
         if (!dorefr()) {
+            // The reflection row stays the interface's own Fresnel, which the
+            // property stream reports and the F0 inversion depends on being
+            // roughness invariant. The transmission row is the pass-through a
+            // base beneath this lobe receives (flat_layering's base scale),
+            // and that is the layer equation's 1 - E_top of the lobe as it
+            // evaluates -- roughness and, on a backfacing hit, the smeared
+            // total internal reflection included. See layer_opacity.
             reflection = reflection_tint * (1.0 - E_ms);
-            transmission = float3(E_ms) * wi_absorption(wi);
+            transmission = (float3(1.0) - reflection_albedo_estimate(wi)) * wi_absorption(wi);
         } else {
             const float3 F = fresnel.eval(abs(wi.z));
             reflection = F * (1.0 - E_ms) * reflection_tint;
@@ -118,7 +125,9 @@ public struct MxCompensatedDielectricBSDF<
 
     public RoughnessInformation eval_roughness(const float3 wi)
     {
-        return RoughnessInformation(roughness_xy, float3(0.0));
+        RoughnessInformation result = RoughnessInformation(roughness_xy, float3(0.0));
+        result.kind = k_bsdf_kind_dielectric;
+        return result;
     }
 
     [ForceInline]
@@ -127,10 +136,53 @@ public struct MxCompensatedDielectricBSDF<
         return !dorefr() ? reflection_tint * (1.0 - layer_energy(wi)) : float3(1.0);
     }
 
+    // What a reflection-only top hands its base is the layer equation's
+    // 1 - E_top, with E_top the directional albedo of the lobe *as it
+    // evaluates*: estimated below from the lobe's own GGX distribution, Fresnel
+    // policy, and compensation scale. Deliberately not layer_energy's
+    // smooth-interface Fresnel, which is roughness-blind: it over-attenuated a
+    // rough top's base at grazing on the front face, and on backfacing hits it
+    // applied a hard total-internal-reflection cutoff at the critical angle
+    // where the same rough lobe still transmits a substantial, smeared share
+    // -- a closed shell of rough glass rendering 35% dark against a thin
+    // panel's 2%. layer_energy itself is untouched: the property stream reports
+    // through it, and the F0 inversion depends on that report staying
+    // roughness invariant. Only what the base receives changes here.
     public float3 layer_opacity(const float3 wi)
     {
-        const float3 layer_transmission = !dorefr() ? float3(layer_energy(wi)) * wi_absorption(wi) : float3(0.0);
+        const float3 layer_transmission = !dorefr()
+            ? (float3(1.0) - reflection_albedo_estimate(wi)) * wi_absorption(wi)
+            : float3(0.0);
         return saturate(float3(1.0) - layer_transmission);
+    }
+
+    // The reflection lobe's directional albedo over a fixed Hammersley set of
+    // its own bounded-VNDF samples: each sample weight is f * cos / pdf by
+    // construction (eval returns weight * pdf), so their mean is the albedo,
+    // including the compensation scale the lobe applies. The Fresnel policy
+    // carries the side's eta, so total internal reflection on a backfacing hit
+    // arrives per microfacet and is smeared by the roughness exactly as the
+    // lobe smears it. Deterministic, so bakes and renders reproduce bit for bit.
+    private float3 reflection_albedo_estimate(const float3 wi)
+    {
+        if (fresnel.index_matched())
+            return float3(0.0);
+        const float3 wi_up = float3(wi.x, wi.y, abs(wi.z));
+        MxGGXDist dist = make_ggx_dist(roughness_xy);
+        const float roughness = microfacet_roughness(roughness_xy);
+        float3 sum = float3(0.0);
+        for (uint k = 0; k < LAYER_ALBEDO_SAMPLES; ++k) {
+            const float2 rnd = hammersley_2d(k, LAYER_ALBEDO_SAMPLES);
+            const float3 m = dist.sample_for_refl(wi_up, rnd.x, rnd.y);
+            const float3 wo = reflect(-wi_up, m);
+            if (wo.z <= 0.0)
+                continue;
+            const float3 F = fresnel.eval(dot(m, wi_up));
+            sum += eval_ggx_reflection_lobe(
+                dist, F, TCompensation::reflection_scale(roughness, wi_up.z, F), wi_up, wo
+            ).weight;
+        }
+        return saturate(sum / float(LAYER_ALBEDO_SAMPLES));
     }
 
     public property float3 ior_as_reflectance
@@ -154,6 +206,16 @@ public struct MxCompensatedDielectricBSDF<
     [ForceInline]
     private float layer_energy(float3 wi)
     {
+        // An index-matched interface does not exist optically, so the limits
+        // are exact: everything transmits, nothing is lost. This cannot come
+        // out of the policies below, because the eta they receive is already
+        // clamped to 1.001 (see index_matched in fresnel.slang) -- both the
+        // analytic Fresnel and the BSDL tables then charge the base for a
+        // grazing sliver the authored material does not have. Reflection-only
+        // layer_energy is the transmitted share; with refraction present it is
+        // the multiple-scattering loss.
+        if (fresnel.index_matched())
+            return dorefr() ? 0.0 : 1.0;
         return TCompensation::layer_energy(
             dorefl(),
             dorefr(),
@@ -363,11 +425,10 @@ public MxDielectricBSDF create_mx_dielectric(
 )
 {
     MxScatterTints scatter_tints = split_scatter_tints(scatter_mode, tint);
-    float material_ior = clamp_dielectric_ior(ior);
     const bool backfacing = !front_facing;
     return MxDielectricBSDF(
         roughness,
-        MxDielectricFresnel(material_ior, backfacing),
+        MxDielectricFresnel(ior, backfacing),
         scatter_tints.reflection,
         scatter_tints.transmission,
         float3(0.0),
@@ -391,11 +452,10 @@ public MxDielectricAiryBSDF create_mx_dielectric_airy(
 )
 {
     MxScatterTints scatter_tints = split_scatter_tints(scatter_mode, tint);
-    float material_ior = clamp_dielectric_ior(ior);
     const bool backfacing = !front_facing;
     return MxDielectricAiryBSDF(
         roughness,
-        MxDielectricAiryFresnel(material_ior, backfacing, thinfilm_thickness, thinfilm_ior),
+        MxDielectricAiryFresnel(ior, backfacing, thinfilm_thickness, thinfilm_ior),
         scatter_tints.reflection,
         scatter_tints.transmission,
         float3(0.0),
@@ -419,11 +479,10 @@ public MxDielectricTurquinAnalyticCompensationBSDF create_mx_dielectric_comp_tur
 )
 {
     MxScatterTints scatter_tints = split_scatter_tints(scatter_mode, tint);
-    float material_ior = clamp_dielectric_ior(ior);
     const bool backfacing = !front_facing;
     return MxDielectricTurquinAnalyticCompensationBSDF(
         roughness,
-        MxDielectricFresnel(material_ior, backfacing),
+        MxDielectricFresnel(ior, backfacing),
         scatter_tints.reflection,
         scatter_tints.transmission,
         float3(0.0),
@@ -447,11 +506,10 @@ public MxDielectricNoCompensationBSDF create_mx_dielectric_comp_no_compensation(
 )
 {
     MxScatterTints scatter_tints = split_scatter_tints(scatter_mode, tint);
-    float material_ior = clamp_dielectric_ior(ior);
     const bool backfacing = !front_facing;
     return MxDielectricNoCompensationBSDF(
         roughness,
-        MxDielectricFresnel(material_ior, backfacing),
+        MxDielectricFresnel(ior, backfacing),
         scatter_tints.reflection,
         scatter_tints.transmission,
         float3(0.0),
@@ -475,11 +533,10 @@ public MxDielectricAiryTurquinAnalyticCompensationBSDF create_mx_dielectric_airy
 )
 {
     MxScatterTints scatter_tints = split_scatter_tints(scatter_mode, tint);
-    float material_ior = clamp_dielectric_ior(ior);
     const bool backfacing = !front_facing;
     return MxDielectricAiryTurquinAnalyticCompensationBSDF(
         roughness,
-        MxDielectricAiryFresnel(material_ior, backfacing, thinfilm_thickness, thinfilm_ior),
+        MxDielectricAiryFresnel(ior, backfacing, thinfilm_thickness, thinfilm_ior),
         scatter_tints.reflection,
         scatter_tints.transmission,
         float3(0.0),
@@ -503,11 +560,10 @@ public MxDielectricAiryNoCompensationBSDF create_mx_dielectric_airy_comp_no_comp
 )
 {
     MxScatterTints scatter_tints = split_scatter_tints(scatter_mode, tint);
-    float material_ior = clamp_dielectric_ior(ior);
     const bool backfacing = !front_facing;
     return MxDielectricAiryNoCompensationBSDF(
         roughness,
-        MxDielectricAiryFresnel(material_ior, backfacing, thinfilm_thickness, thinfilm_ior),
+        MxDielectricAiryFresnel(ior, backfacing, thinfilm_thickness, thinfilm_ior),
         scatter_tints.reflection,
         scatter_tints.transmission,
         float3(0.0),

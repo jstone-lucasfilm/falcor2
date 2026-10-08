@@ -38,6 +38,13 @@ public interface IMxExtraBsdfPropertiesCollector : ILayerableBSDF
     );
 };
 
+// The property stream's albedo query: normal incidence in the leaf's own frame,
+// on the side the shared query arrives from, so a backfacing hit keeps its sign.
+public float3 mx_normal_incidence_wi(const float3 local_wi)
+{
+    return float3(0.0, 0.0, local_wi.z < 0.0 ? -1.0 : 1.0);
+}
+
 // This recursive material-property traversal is only used by closure_tree.
 // The flat bsdf_mix root emits its own leaf loop during codegen.
 public interface IMxMaterialPropertiesCollector : ILayerableBSDF
@@ -131,15 +138,33 @@ public extension<Inner> mtlx::MxFramedWeightedBSDF<Inner> : mtlx::IMxExtraBsdfPr
         if (bsdf_index >= ExtraBsdfProperties::max_bsdf_count)
             return saturate(this.weight * this.inner.layer_opacity(local_wi));
 
-        AlbedoContributions albedo = this.inner.eval_albedo(local_wi);
+        // The albedo rows are the leaf's normal-incidence reflectance, so they are
+        // queried along the leaf's *own* normal. Localizing the shared query into a
+        // frame a normal map has tilted reported the Fresnel at the tilt angle
+        // instead (0.053 against an F0 of 0.017 at 60 degrees, IOR 1.3), which a
+        // consumer reading F0 per texel takes as a brighter interface wherever
+        // the bump is steep. The weight's pass-through (layer_opacity below)
+        // stays on the real query: it is how much light reaches the base, not a
+        // property of the interface.
+        AlbedoContributions albedo = this.inner.eval_albedo(mtlx::mx_normal_incidence_wi(local_wi));
         RoughnessInformation roughness = this.inner.eval_roughness(local_wi);
         result.bsdf_N[bsdf_index] = this.frame.normal;
         result.bsdf_T[bsdf_index] = this.frame.tangent;
         result.bsdf_B[bsdf_index] = this.frame.bitangent;
-        result.bsdf_albedo[bsdf_index] = albedo.reflection + this.material_transmission * albedo.transmission;
+        // Reflection and through-material transmission travel as separate rows:
+        // folding transmitted energy into the albedo made an RT dielectric's
+        // reflection interface unreadable (an F0 inversion saw ~1.0 where the
+        // interface reflects ~0.04). ``material_transmission`` gates the new row
+        // because for a reflection-only leaf ``albedo.transmission`` is the
+        // layer pass-through share, not light leaving the material.
+        result.bsdf_albedo[bsdf_index] = albedo.reflection;
+        result.bsdf_transmission[bsdf_index] = this.material_transmission * albedo.transmission;
         result.bsdf_weight[bsdf_index] += ctx.closure_weight * this.weight;
         result.bsdf_roughness[bsdf_index] = roughness.roughness;
         result.bsdf_scratch[bsdf_index] = roughness.scratch;
+        result.bsdf_extinction[bsdf_index] = roughness.extinction;
+        result.bsdf_ior[bsdf_index] = roughness.ior;
+        result.bsdf_kind[bsdf_index] = roughness.kind;
 
         return saturate(this.weight * this.inner.layer_opacity(local_wi));
     }
