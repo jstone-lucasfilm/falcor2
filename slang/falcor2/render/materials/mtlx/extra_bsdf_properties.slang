@@ -183,11 +183,14 @@ public extension<Top, Base> mtlx::MxLayerBSDF<Top, Base> : mtlx::IMxExtraBsdfPro
     )
     {
         const float3 top_opacity = this.top.collect_extra_bsdf_properties(result, reported_count, ctx);
-        const float3 saved_closure_weight
-            = mtlx::mx_push_extra_closure_weight(ctx, saturate(float3(1.0) - top_opacity));
+        const float3 base_scale = saturate(float3(1.0) - top_opacity);
+        const float3 saved_closure_weight = mtlx::mx_push_extra_closure_weight(ctx, base_scale);
         const float3 base_opacity = this.base.collect_extra_bsdf_properties(result, reported_count, ctx);
         mtlx::mx_pop_extra_closure_weight(ctx, saved_closure_weight);
-        return base_opacity;
+        // The layer's own opacity composes by the specification's transmittance
+        // product (MxLayerBSDF::layer_opacity), so a nested top keeps occluding
+        // what lies beneath the outer layer.
+        return saturate(top_opacity + base_scale * base_opacity);
     }
 }
 
@@ -287,11 +290,11 @@ public extension<Top, Base> mtlx::MxLayerBSDF<Top, Base> : mtlx::IMxMaterialProp
     )
     {
         const float3 top_opacity = this.top.collect_material_properties(result, roughness_norm, guide_normal, ctx);
-        const float3 saved_closure_weight
-            = mtlx::mx_push_extra_closure_weight(ctx, saturate(float3(1.0) - top_opacity));
+        const float3 base_scale = saturate(float3(1.0) - top_opacity);
+        const float3 saved_closure_weight = mtlx::mx_push_extra_closure_weight(ctx, base_scale);
         const float3 base_opacity = this.base.collect_material_properties(result, roughness_norm, guide_normal, ctx);
         mtlx::mx_pop_extra_closure_weight(ctx, saved_closure_weight);
-        return base_opacity;
+        return saturate(top_opacity + base_scale * base_opacity);
     }
 }
 

@@ -148,11 +148,22 @@ public struct MxCompensatedDielectricBSDF<
     // panel's 2%. layer_energy itself is untouched: the property stream reports
     // through it, and the F0 inversion depends on that report staying
     // roughness invariant. Only what the base receives changes here.
+    //
+    // The specification's vertical-layering transmittance of an interface BSDF
+    // is 1 - E_o over its *reflection* lobes alone, so that light transmitted
+    // rather than reflected by a transmissive scatter mode continues to the
+    // layers beneath. A transmissive top therefore still passes 1 - E_R: a
+    // T-only lobe has no reflection lobe and passes everything, and an RT lobe
+    // passes what its reflection half does not reflect. Returning full opacity
+    // for any dorefr() top dropped the whole base of every layer(T, base) --
+    // the construction every LamaDielectric coat carries beneath its reflection
+    // lobe, so a Lama-coated conductor rendered as a clear glass. The interior
+    // absorption applies only to the reflection-only coat case, as before.
     public float3 layer_opacity(const float3 wi)
     {
-        const float3 layer_transmission = !dorefr()
-            ? (float3(1.0) - reflection_albedo_estimate(wi)) * wi_absorption(wi)
-            : float3(0.0);
+        if (!dorefl())
+            return float3(0.0);
+        const float3 layer_transmission = (float3(1.0) - reflection_albedo_estimate(wi)) * wi_absorption(wi);
         return saturate(float3(1.0) - layer_transmission);
     }
 

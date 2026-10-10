@@ -147,6 +147,11 @@ void classify_layering(
 // shared composition refs remain legal.
 void validate_weighted_layer_top_refs_are_not_shared(const LayeringDesc& desc);
 
+// Clears through_material_transmissive on every transmissive BSDF that sits in
+// the top branch of a layer whose base is a BSDF: its transmission continues to
+// the layers beneath rather than leaving the material. Run by classify_layering.
+void clear_through_material_transmission_over_bsdf_bases(LayeringDesc& desc);
+
 // Converts weighted_layer analysis nodes to ordinary layer nodes after all
 // weighted-layer-specific structural checks have run. The generated stack has
 // already folded top_weight into the top input edge, so emitters should not

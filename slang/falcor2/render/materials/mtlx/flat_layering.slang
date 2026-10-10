@@ -36,7 +36,9 @@ public enum LayerPassThroughTransmissionMode : int {
     absorption = 3,
     // Use absorption unless this is active transmissive scatter.
     absorption_unless_transmissive = 4,
-    // Use physical transmission unless transmissive scatter should block the base.
+    // Use physical transmission, or for active transmissive scatter the
+    // reflection lobes' pass-through (1 - reflection), never the through-material
+    // share.
     physical_unless_transmissive = 5,
 };
 
@@ -130,7 +132,16 @@ float3 layer_pass_through_transmission(
     }
     float3 physical_transmission = albedo.transmission;
     if (mode == LayerPassThroughTransmissionMode.physical_unless_transmissive) {
-        return active_transmissive_scatter ? float3(0.0) : physical_transmission;
+        // A transmissive scatter mode's eval_albedo().transmission is light
+        // leaving the material, not the layer pass-through; but the pass-through
+        // is not zero either. The specification's vertical-layering transmittance
+        // of an interface is 1 - E_o over its reflection lobes alone, so a
+        // transmissive top hands its base whatever its reflection half does not
+        // reflect: everything, for a T-only lobe (reflection 0), which is the
+        // leaf every LamaDielectric coat carries beneath its reflection lobe.
+        // Zero here dropped the base of every layer(T, base). The closure-tree
+        // path computes the same quantity untinted in each lobe's layer_opacity.
+        return active_transmissive_scatter ? saturate(float3(1.0) - albedo.reflection) : physical_transmission;
     }
     if (mode == LayerPassThroughTransmissionMode.absorption
         || mode == LayerPassThroughTransmissionMode.absorption_unless_transmissive) {
@@ -174,9 +185,11 @@ float3 material_instance_transmission(
 // filter_o() is physical transmission. The mode enums encode the exceptions:
 //
 // - Transmissive dielectric/generalized-Schlick scatter uses albedo_impl() =
-//   unity in BSDL, while filter_o() is zero so layer(top, base) does not show
-//   the base through that transmissive scatter branch. The real transmission
-//   still exists for the material instance, so it is preserved separately.
+//   unity in BSDL, while filter_o() is the reflection lobes' pass-through
+//   (1 - reflection, the specification's vertical-layering transmittance of an
+//   interface), so layer(top, base) shows the base through the transmitted
+//   share. The real transmission still exists for the material instance, so it
+//   is preserved separately.
 // - Reflection-only dielectric/generalized-Schlick exposes only reflection as
 //   sample albedo; any pass-through sits in filter_o().
 // - Sheen is reflection-only: its BSDL filter_o() represents upper-hemisphere

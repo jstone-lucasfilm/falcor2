@@ -55,6 +55,11 @@ struct MxFlatBsdfDesc {
     MxFlatLayerPassThroughTransmissionMode layer_pass_through_transmission_mode
         = MxFlatLayerPassThroughTransmissionMode::physical;
     bool uses_transmission_tint_predicate = false;
+    // Whether this BSDF's transmission leaves the material (a glass, or the
+    // surface boundary of a medium) rather than continuing to a BSDF layered
+    // beneath it (a coat). The layering analysis decides it from the stack's
+    // shape; the property report's transmission row is gated on it.
+    bool through_material_transmissive = false;
 };
 
 struct MxFlatCombinerDesc {

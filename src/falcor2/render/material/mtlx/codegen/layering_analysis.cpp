@@ -626,6 +626,52 @@ void classify_layering(
 
     for (LayeringDesc::CombinerDesc& combiner : desc.combiners)
         combiner.mode = classify_combiner(combiner.node_impl);
+
+    // A transmissive lobe transmits *through the material* only where nothing
+    // lies beneath it: layered over a VDF or over nothing, it is the surface
+    // boundary of an interior medium. Layered over another BSDF, the light it
+    // transmits continues to the layers beneath (the specification's
+    // vertical-layering model: T_top passes to the base), so it is a coat, and
+    // its transmission is not light leaving the material. Every LamaDielectric
+    // coat is this case -- a transmission-only lobe standing between the coat's
+    // reflection and its base -- and reporting it as through-material made a
+    // Lama-coated conductor read as a clear glass.
+    clear_through_material_transmission_over_bsdf_bases(desc);
+}
+
+namespace {
+
+void clear_through_material_transmission_in_branch(
+    LayeringDesc& desc,
+    ClosureRef ref,
+    bool has_bsdf_beneath,
+    std::set<ClosureRef>& visited
+)
+{
+    if (ref.is_none() || !visited.insert(ref).second)
+        return;
+    if (ref.is_bsdf()) {
+        if (has_bsdf_beneath)
+            desc.bsdfs[ref.bsdf_index()].through_material_transmissive = false;
+        return;
+    }
+    const LayeringDesc::CombinerDesc& combiner = desc.combiners[ref.combiner_index()];
+    const bool is_layer = combiner.mode == CombinerMode::layer || combiner.mode == CombinerMode::weighted_layer;
+    // children[0] is the top of a layer; a connected children[1] is a BSDF base
+    // (a VDF base never resolves to a closure ref, so it reads as none).
+    const bool top_has_base = is_layer && !combiner.children[1].is_none();
+    clear_through_material_transmission_in_branch(
+        desc, combiner.children[0], has_bsdf_beneath || top_has_base, visited
+    );
+    clear_through_material_transmission_in_branch(desc, combiner.children[1], has_bsdf_beneath, visited);
+}
+
+} // namespace
+
+void clear_through_material_transmission_over_bsdf_bases(LayeringDesc& desc)
+{
+    std::set<ClosureRef> visited;
+    clear_through_material_transmission_in_branch(desc, desc.main_layer, false, visited);
 }
 
 static void count_reachable_ref_uses(

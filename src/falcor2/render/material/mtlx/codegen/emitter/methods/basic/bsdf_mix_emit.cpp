@@ -75,7 +75,8 @@ make_mtlx_bsdf_mix_root_desc(const LayeringDesc& desc, const ProfileDesc& profil
              bsdf.bsdf_type,
              bsdf_mix_layer_pass_through_albedo_mode(bsdf),
              bsdf_mix_layer_pass_through_transmission_mode(bsdf),
-             is_scatter_mode_bsdf(bsdf.node_impl)}
+             is_scatter_mode_bsdf(bsdf.node_impl),
+             bsdf.through_material_transmissive}
         );
     }
 

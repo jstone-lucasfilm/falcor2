@@ -751,9 +751,15 @@ std::string emit_bsdf_mix_root_bsdf(const MxFlatRootDesc& desc)
                 + ref_albedo(combiner.branch0_ref) + " + base_scale_" + std::to_string(i) + " * "
                 + ref_albedo(combiner.branch1_ref) + ")"
             );
+            // A layer's opacity composes by the specification's transmittance
+            // product, o_top + (1 - o_top) o_base, so a nested top's own lobes
+            // keep occluding what lies beneath the outer layer (see
+            // MxLayerBSDF::layer_opacity). The base branch's opacity alone
+            // dropped the top's.
             e.line(
-                combiner_summary_local(i, "opacity") + " = saturate(" + combiner_weight_local(i) + " * "
-                + ref_opacity(combiner.branch1_ref) + ")"
+                combiner_summary_local(i, "opacity") + " = saturate(" + combiner_weight_local(i) + " * ("
+                + ref_opacity(combiner.branch0_ref) + " + base_scale_" + std::to_string(i) + " * "
+                + ref_opacity(combiner.branch1_ref) + "))"
             );
             e.line(
                 combiner_summary_local(i, "reflection") + " = " + combiner_weight_local(i) + " * ("
@@ -943,11 +949,17 @@ std::string emit_bsdf_mix_root_bsdf(const MxFlatRootDesc& desc)
         e.line("    result.bsdf_B[" + std::to_string(i) + "] = " + bsdf_frame_field(bsdf_index) + ".bitangent");
         // Reflection-only albedo row, with through-material transmission on its
         // own row — the same split the closure_tree collector makes, so both
-        // roots report an RT dielectric's interface readably.
+        // roots report an RT dielectric's interface readably. The row is gated
+        // on the layering analysis's through_material_transmissive, as the
+        // closure_tree collector gates it through material_transmission: a
+        // transmissive lobe layered over another BSDF is a coat whose
+        // transmission continues to the layers beneath, not light leaving the
+        // material, and reporting it made a Lama-coated conductor read as glass.
         e.line("    result.bsdf_albedo[" + std::to_string(i) + "] = " + eval_albedo + ".reflection");
         e.line(
-            "    result.bsdf_transmission[" + std::to_string(i) + "] = " + compatibility_albedo
-            + ".material_instance_transmission"
+            "    result.bsdf_transmission[" + std::to_string(i) + "] = "
+            + (bsdf.through_material_transmissive ? compatibility_albedo + ".material_instance_transmission"
+                                                  : std::string("float3(0.0)"))
         );
         e.line(
             "    result.bsdf_weight[" + std::to_string(i) + "] += ctx.closure_weight * " + bsdf_weight_field(bsdf_index)

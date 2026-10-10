@@ -141,10 +141,15 @@ public struct MxCompensatedGeneralizedSchlickBSDF<
     // eval_albedo's reflection-only transmission is 1 minus this same scalar,
     // because the generated bsdf_mix layering reads the pass-through from
     // there rather than from this method.
+    //
+    // The transmittance is over the reflection lobes alone (the specification's
+    // vertical-layering transmittance), so a transmissive scatter mode does not
+    // make the top opaque: a T-only lobe passes everything and an RT lobe passes
+    // what its reflection half does not reflect. See dielectric.slang.
     public float3 layer_opacity(const float3 wi)
     {
-        if (dorefr())
-            return float3(1.0);
+        if (!dorefl())
+            return float3(0.0);
         return saturate(float3(dot(layer_directional_albedo(wi), float3(1.0 / 3.0))));
     }
 
