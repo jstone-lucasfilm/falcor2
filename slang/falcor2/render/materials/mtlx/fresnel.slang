@@ -106,6 +106,15 @@ public interface IMxRefractiveFresnelPolicy : IMxFresnelPolicy
     /// ior = 1 as a mix background meaning "nothing here", which is why the
     /// exact case is load-bearing.
     bool index_matched();
+
+    /// The authored grazing reflectance and Fresnel exponent of a Schlick-shaped
+    /// curve, for property reporting only -- nothing in transport consults them.
+    /// A Schlick lobe's F0 travels in the albedo row, but its F90 and exponent
+    /// shape everything above normal incidence and no reflectance at a single
+    /// angle recovers them, so the leaf reports them outright. Zero for a
+    /// physical (ior-driven) dielectric, whose curve the ior alone determines.
+    float3 schlick_color90();
+    float schlick_exponent();
 }
 
 public struct MxConductorFresnel : IMxReflectiveFresnelPolicy
@@ -287,6 +296,12 @@ public struct MxDielectricFresnel : IMxRefractiveFresnelPolicy
     [ForceInline]
     public bool index_matched() { return matched; }
 
+    [ForceInline]
+    public float3 schlick_color90() { return float3(0.0); }
+
+    [ForceInline]
+    public float schlick_exponent() { return 0.0; }
+
     // The ior-derived F0 with a white F90, the shape genglsl's
     // mx_dielectric_bsdf builds its dirAlbedo from. The dielectric BSDF's own
     // layer_opacity stays on the tabulated energy curves -- eta genuinely is
@@ -357,6 +372,12 @@ public struct MxDielectricAiryFresnel : IMxRefractiveFresnelPolicy
     public bool index_matched() { return matched && thinfilm_thickness <= 0.0; }
 
     [ForceInline]
+    public float3 schlick_color90() { return float3(0.0); }
+
+    [ForceInline]
+    public float schlick_exponent() { return 0.0; }
+
+    [ForceInline]
     public float3 layer_directional_albedo(float cos_theta, float alpha)
     {
         if (index_matched())
@@ -411,6 +432,12 @@ public struct MxSchlickFresnel : IMxRefractiveFresnelPolicy
     // exactly zero there.
     [ForceInline]
     public bool index_matched() { return false; }
+
+    [ForceInline]
+    public float3 schlick_color90() { return F90; }
+
+    [ForceInline]
+    public float schlick_exponent() { return exponent; }
 
     // The colours that define this lobe's reflectance, through the same
     // analytic albedo fit genglsl's mx_generalized_schlick_bsdf uses. The
@@ -467,6 +494,12 @@ public struct MxSchlickColor82Fresnel : IMxRefractiveFresnelPolicy
 
     [ForceInline]
     public bool index_matched() { return false; }
+
+    [ForceInline]
+    public float3 schlick_color90() { return F90; }
+
+    [ForceInline]
+    public float schlick_exponent() { return exponent; }
 
     // F82 is deliberately absent: mx_ggx_dir_albedo takes only F0 and F90, and
     // MaterialX's hoffman-schlick correction vanishes when both are zero, so
@@ -538,6 +571,12 @@ public struct MxSchlickAiryFresnel : IMxRefractiveFresnelPolicy
 
     [ForceInline]
     public bool index_matched() { return false; }
+
+    [ForceInline]
+    public float3 schlick_color90() { return F90; }
+
+    [ForceInline]
+    public float schlick_exponent() { return exponent; }
 
     // The authored F0/F90, as genglsl uses regardless of thin film. Whether an
     // active film's chromatic Fresnel should instead flow through here is an

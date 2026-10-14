@@ -99,8 +99,24 @@ public struct MxCompensatedGeneralizedSchlickBSDF<
             // reflectance, not from the eta-keyed energy tables, and reduced
             // to the achromatic scalar mean of genglsl's avgDirAlbedo -- an
             // artistic tint's colour is absorption, not pass-through.
+            //
+            // The reflection row is the lobe's own Fresnel at the query angle,
+            // as the dielectric leaf reports it, so the property stream's
+            // normal-incidence query reads color0 at every roughness. Reporting
+            // the directional albedo here made it the analytic fit's F90 term at
+            // a sharp width and its energy loss at a rough one: +6% of color0 at
+            // alpha 0.0001 and -66% at alpha 1, which a consumer inverting it as
+            // an F0 reads as a reflectance error of that size. The pass-through
+            // below and layer_opacity keep the
+            // directional albedo, which is what the base actually receives.
+            // The bsdf_mix root also reads this row as the lobe's sample
+            // albedo, so it sets the share of samples a Schlick top draws: the
+            // estimator is unbiased under either value, and the old one
+            // oversampled a near-mirror top over transmission (the
+            // transmission isolate's render RMSE 0.1015 -> 0.0834 at 64 spp
+            // with its BSDF unchanged).
             const float3 dir_albedo = layer_directional_albedo(wi);
-            reflection = reflection_tint * dir_albedo;
+            reflection = reflection_tint * fresnel.eval(abs(wi.z));
             transmission = float3(1.0 - dot(dir_albedo, float3(1.0 / 3.0)));
         } else {
             const float3 F = fresnel.eval(abs(wi.z));
@@ -120,7 +136,14 @@ public struct MxCompensatedGeneralizedSchlickBSDF<
 
     public RoughnessInformation eval_roughness(const float3 wi)
     {
-        RoughnessInformation result = RoughnessInformation(roughness_xy, float3(0.0));
+        // A Schlick leaf has no complex ior, so the conductor rows carry its
+        // authored curve instead: extinction holds color90 and ior.x the
+        // exponent, the kind telling a consumer which reading applies. Without
+        // them the property stream saw only F0, and a textured color90 could
+        // only be recovered as a constant.
+        RoughnessInformation result = RoughnessInformation(
+            roughness_xy, float3(0.0), fresnel.schlick_color90(), float3(fresnel.schlick_exponent(), 0.0, 0.0)
+        );
         result.kind = k_bsdf_kind_generalized_schlick;
         return result;
     }

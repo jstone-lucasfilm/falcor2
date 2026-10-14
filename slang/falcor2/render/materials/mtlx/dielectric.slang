@@ -125,7 +125,16 @@ public struct MxCompensatedDielectricBSDF<
 
     public RoughnessInformation eval_roughness(const float3 wi)
     {
-        RoughnessInformation result = RoughnessInformation(roughness_xy, float3(0.0));
+        // The dielectric's own index, in ior.x: the albedo row carries only its
+        // F0, which identifies the index for a lone interface but not for a
+        // transmission lobe whose material sets reflection and refraction apart.
+        // A layer that reflects through a Schlick lobe and refracts through this
+        // dielectric has one index from its F0 (0.1 implies 1.86) and another
+        // from this leaf's ior (say 1.52); a consumer reading the F0 writes the
+        // former. Recovered from the oriented eta, so either face reports the
+        // same base index; zero when index matched.
+        const float index = fresnel.index_matched() ? 0.0 : dielectric_base_ior(fresnel.refraction_eta());
+        RoughnessInformation result = RoughnessInformation(roughness_xy, float3(0.0), float3(0.0), float3(index, 0.0, 0.0));
         result.kind = k_bsdf_kind_dielectric;
         return result;
     }
