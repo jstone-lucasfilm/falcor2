@@ -20,7 +20,8 @@ public struct MxContyKullaSheenMtx
 {
     public float roughness;
 
-    public __init(float rough) { roughness = max(rough, 0.06); }
+    // Numerical floor only, matching genglsl mx_imageworks_sheen_NDF.
+    public __init(float rough) { roughness = max(rough, 0.005); }
 
     public float D(float3 Hr)
     {
@@ -215,7 +216,7 @@ public struct MxSheenBSDFImpl<TCoefficients : IMxZeltnerSheenCoefficientPolicy> 
         // Spec compliance: the MaterialX specification defines the authored
         // sheen roughness directly as the Zeltner LTC parameter r. The
         // original Falcor OSL/BSDL port used sqrt(base_roughness).
-        sheen_alpha = zeltner ? max(MX_ZELTNER_SHEEN_MIN_ROUGHNESS, base_roughness) : max(0.06, base_roughness);
+        sheen_alpha = zeltner ? max(MX_ZELTNER_SHEEN_MIN_ROUGHNESS, base_roughness) : max(0.005, base_roughness);
         if (backfacing) {
             Emiss = 1.0;
         } else if (zeltner) {

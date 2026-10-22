@@ -112,15 +112,16 @@ public struct MxConductorFresnel : IMxReflectiveFresnelPolicy
         return 0.5 * clamp(rp + rs, 0.0, 2.0);
     }
 
-    // BSDL: bsdf_conductor_impl.h:62-76 ConductorFresnel::avg
+    // BSDL: bsdf_conductor_impl.h:62-76 ConductorFresnel::avg, replacing the
+    // fitted (n, k) polynomial with the exact normal-incidence Fresnel, the
+    // inverse of MaterialX artistic_ior.
     public float3 avg()
     {
-        const float a = -0.32775145;
-        const float b = 0.18346033;
-        const float c = 0.61146583;
-        const float d = -0.07785134;
-        const float3 p = a + b * IOR + c * extinction + d * IOR * extinction;
-        return clamp(p / (float3(1.0) + p), 0.0, 1.0);
+        const float3 one = float3(1.0);
+        const float3 k2 = extinction * extinction;
+        const float3 numerator = (IOR - one) * (IOR - one) + k2;
+        const float3 denominator = (IOR + one) * (IOR + one) + k2;
+        return clamp(numerator / max(denominator, float3(float.MIN)), 0.0, 1.0);
     }
 
     [ForceInline]
