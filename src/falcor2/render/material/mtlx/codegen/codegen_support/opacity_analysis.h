@@ -3,14 +3,15 @@
 
 #pragma once
 
+#include <MaterialXCore/Generated.h>
+
 #include "../graph_prepare/static_input_query/static_input_query.h"
 
 #include <optional>
 
-namespace MaterialX_v1_39_5 {
+MATERIALX_NAMESPACE_BEGIN
 class ShaderGraph;
-} // namespace MaterialX_v1_39_5
-namespace MaterialX = MaterialX_v1_39_5;
+MATERIALX_NAMESPACE_END
 
 namespace falcor {
 namespace mtlx {

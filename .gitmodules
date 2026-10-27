@@ -9,4 +9,5 @@
 	url = https://github.com/adobe/openpbr-bsdf
 [submodule "external/MaterialX"]
 	path = external/MaterialX
-	url = https://github.com/tdavidovicNV/MaterialX
+	url = https://github.com/jstone-lucasfilm/MaterialX
+	branch = dev_pinned_branch
