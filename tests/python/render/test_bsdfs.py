@@ -901,6 +901,37 @@ def test_mtlx_generalized_schlick_colored_branch_probability(
     assert transmitted.z / transmitted_only.z == pytest.approx(1.0 - p_reflect, rel=1e-6)
 
 
+def test_mtlx_generalized_schlick_backfacing_pass_through(
+    _bsdf_resources: _BSDFResources,
+    _mtlx_lut_bindings: dict[str, Any],
+) -> None:
+    """A Schlick top hit from behind hands its base only what it does not reflect.
+
+    Past the critical angle the lobe's Fresnel reflects everything, so the back
+    face reflects far more than the front-face albedo fit says. Handing the base
+    the front-face pass-through let light arriving from inside a Schlick-over-diffuse
+    layer leave with 1.30 of what arrived (UnifiedSrf over a translucent base). The
+    front face is unchanged: its pass-through and albedo still sum to one.
+    """
+    kernel = (
+        _bsdf_resources.module["bsdf_tests::test_mtlx_generalized_schlick_backfacing_pass_through"]
+        .as_func()
+        .set(_mtlx_lut_bindings)
+    )
+    front_pass, front_albedo, back_pass, back_sampled = kernel(sample_count=4096)
+
+    assert front_pass + front_albedo == pytest.approx(1.0, abs=1e-5)
+    # Total internal reflection makes the back face strongly reflective here.
+    assert back_sampled > 0.5
+    # What the base receives is the share the lobe as it samples does not reflect,
+    # never more: the 32-point estimate (dielectric.slang's, reused) reads this
+    # back face 4-13% more reflective than 8192 samples do across incidence, so the
+    # base gets slightly less, and the stack cannot create energy.
+    assert back_pass <= 1.0 - back_sampled + 0.01
+    assert back_pass == pytest.approx(1.0 - back_sampled, abs=0.08)
+    assert back_pass < front_pass
+
+
 @pytest.mark.parametrize(
     "family,expected_events",
     [

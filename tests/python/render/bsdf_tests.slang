@@ -368,6 +368,54 @@ public float4 test_mtlx_generalized_schlick_retroreflection_sample()
     );
 }
 
+/// A reflection-only Schlick top (F0 0.04, as UnifiedSrf's specular), one face at a time.
+mtlx::MxGeneralizedSchlickBSDF make_test_mtlx_schlick_top(bool front_facing)
+{
+    return mtlx::create_mx_generalized_schlick(
+        float3(0.04),
+        float3(0.04),
+        float3(1.0),
+        5.0,
+        float2(0.42, 0.42),
+        false,
+        0.0,
+        1.5,
+        float3(0.0, 0.0, 1.0),
+        float3(1.0, 0.0, 0.0),
+        0,
+        0,
+        front_facing
+    );
+}
+
+/// Energy a reflection-only Schlick top keeps from its base, against what it reflects.
+/// x: the front face's pass-through, y: its directional albedo (their sum is 1);
+/// z: the back face's pass-through, w: the lobe's sampled albedo on that face.
+/// A back face past the critical angle reflects far more than the front, so a
+/// pass-through taken from the front-face fit hands the base energy the top
+/// already reflected.
+public float4 test_mtlx_generalized_schlick_backfacing_pass_through(uint sample_count)
+{
+    const float3 wi = normalize(float3(sqrt(0.75), 0.0, 0.5));
+    mtlx::MxGeneralizedSchlickBSDF front = make_test_mtlx_schlick_top(true);
+    mtlx::MxGeneralizedSchlickBSDF back = make_test_mtlx_schlick_top(false);
+    BSDFContext bc = BSDFContext(1.0, 1.0, BSDFFlags::all);
+    float sampled = 0.0;
+    for (uint k = 0; k < sample_count; ++k) {
+        const float2 u = mtlx::hammersley_2d(k, sample_count);
+        FixedSampleGenerator sg = FixedSampleGenerator(float3(u, 0.5));
+        BSDFSample sample = {};
+        if (back.sample(wi, sample, sg, bc))
+            sampled += luminance(sample.weight);
+    }
+    return float4(
+        front.eval_albedo(wi).transmission.x,
+        dot(front.directional_albedo(wi), float3(1.0 / 3.0)),
+        back.eval_albedo(wi).transmission.x,
+        sampled / float(sample_count)
+    );
+}
+
 // ============================================================================
 // Chi-square test target
 // ============================================================================

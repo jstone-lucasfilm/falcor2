@@ -107,17 +107,18 @@ public struct MxCompensatedGeneralizedSchlickBSDF<
             // a sharp width and its energy loss at a rough one: +6% of color0 at
             // alpha 0.0001 and -66% at alpha 1, which a consumer inverting it as
             // an F0 reads as a reflectance error of that size. The pass-through
-            // below and layer_opacity keep the
-            // directional albedo, which is what the base actually receives.
+            // below and layer_opacity keep the directional albedo, which is what
+            // the base actually receives (pass_through_albedo, which on a
+            // backfacing hit is the lobe's own, total internal reflection
+            // included).
             // The bsdf_mix root also reads this row as the lobe's sample
             // albedo, so it sets the share of samples a Schlick top draws: the
             // estimator is unbiased under either value, and the old one
             // oversampled a near-mirror top over transmission (the
             // transmission isolate's render RMSE 0.1015 -> 0.0834 at 64 spp
             // with its BSDF unchanged).
-            const float3 dir_albedo = layer_directional_albedo(wi);
             reflection = reflection_tint * fresnel.eval(abs(wi.z));
-            transmission = float3(1.0 - dot(dir_albedo, float3(1.0 / 3.0)));
+            transmission = float3(1.0 - pass_through_albedo(wi));
         } else {
             const float3 F = fresnel.eval(abs(wi.z));
             reflection = F * (1.0 - E_ms) * reflection_tint;
@@ -150,7 +151,11 @@ public struct MxCompensatedGeneralizedSchlickBSDF<
 
     public float3 directional_albedo(const float3 wi)
     {
-        return !dorefr() ? reflection_tint * layer_directional_albedo(wi) : float3(1.0);
+        if (dorefr())
+            return float3(1.0);
+        // The same lobe pass_through_albedo measures, so a layer's top/base sample
+        // split and its base scale describe one energy budget on either face.
+        return reflection_tint * (backfacing ? reflection_albedo_estimate(wi) : layer_directional_albedo(wi));
     }
 
     // The layering invariant: what this lobe does not reflect it hands down, so
@@ -173,7 +178,7 @@ public struct MxCompensatedGeneralizedSchlickBSDF<
     {
         if (!dorefl())
             return float3(0.0);
-        return saturate(float3(dot(layer_directional_albedo(wi), float3(1.0 / 3.0))));
+        return saturate(float3(pass_through_albedo(wi)));
     }
 
     public property float3 ior_as_reflectance
@@ -192,6 +197,46 @@ public struct MxCompensatedGeneralizedSchlickBSDF<
     private float3 layer_directional_albedo(const float3 wi)
     {
         return fresnel.layer_directional_albedo(abs(wi.z), microfacet_average_alpha(roughness_xy));
+    }
+
+    // The scalar share of incident light this reflection-only lobe keeps from the
+    // layers beneath it: the layer equation's E_top, reduced to the achromatic mean
+    // genglsl's avgDirAlbedo takes. On the front face it is the analytic albedo fit
+    // of F0/F90, as genglsl computes it. On a backfacing hit that fit is the wrong
+    // lobe: the Fresnel policy carries the inverted index there and reflects
+    // everything past the critical angle, so the lobe as it evaluates reflects far
+    // more than the front-face fit says, and a base beneath it was handed the
+    // difference as well -- light arriving from inside a Schlick-over-diffuse
+    // UnifiedSrf left with 1.30 of what arrived. The backfacing share is therefore
+    // the lobe's own directional albedo, estimated from its GGX distribution and
+    // Fresnel policy as dielectric.slang's reflection_albedo_estimate does, so the
+    // total internal reflection is smeared by the roughness exactly as the lobe
+    // smears it. Front-facing results are unchanged.
+    private float pass_through_albedo(const float3 wi)
+    {
+        if (!backfacing)
+            return dot(layer_directional_albedo(wi), float3(1.0 / 3.0));
+        return dot(reflection_albedo_estimate(wi), float3(1.0 / 3.0));
+    }
+
+    private float3 reflection_albedo_estimate(const float3 wi)
+    {
+        const float3 wi_up = float3(wi.x, wi.y, abs(wi.z));
+        MxGGXDist dist = make_ggx_dist(roughness_xy);
+        const float roughness = microfacet_roughness(roughness_xy);
+        float3 sum = float3(0.0);
+        for (uint k = 0; k < LAYER_ALBEDO_SAMPLES; ++k) {
+            const float2 rnd = hammersley_2d(k, LAYER_ALBEDO_SAMPLES);
+            const float3 m = dist.sample_for_refl(wi_up, rnd.x, rnd.y);
+            const float3 wo = reflect(-wi_up, m);
+            if (wo.z <= 0.0)
+                continue;
+            const float3 F = fresnel.eval(dot(m, wi_up));
+            sum += eval_ggx_reflection_lobe(
+                dist, F, TCompensation::reflection_scale(roughness, wi_up.z, F), wi_up, wo
+            ).weight;
+        }
+        return saturate(sum / float(LAYER_ALBEDO_SAMPLES));
     }
 
     private float layer_energy(float3 wi)
