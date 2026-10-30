@@ -68,6 +68,7 @@ make_mtlx_bsdf_mix_root_desc(const LayeringDesc& desc, const ProfileDesc& profil
     flat_desc.type_name = root_type_name;
     flat_desc.root_ref = desc.main_layer;
     flat_desc.bsdfs.reserve(desc.bsdfs.size());
+    const std::vector<int> extra_slots = extra_bsdf_property_slots(desc);
     for (size_t i = 0; i < desc.bsdfs.size(); ++i) {
         const LayeringDesc::BsdfDesc& bsdf = desc.bsdfs[i];
         flat_desc.bsdfs.push_back(
@@ -76,7 +77,8 @@ make_mtlx_bsdf_mix_root_desc(const LayeringDesc& desc, const ProfileDesc& profil
              bsdf_mix_layer_pass_through_albedo_mode(bsdf),
              bsdf_mix_layer_pass_through_transmission_mode(bsdf),
              is_scatter_mode_bsdf(bsdf.node_impl),
-             bsdf.through_material_transmissive}
+             bsdf.through_material_transmissive,
+             extra_slots[i]}
         );
     }
 

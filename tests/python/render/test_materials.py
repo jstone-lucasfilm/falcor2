@@ -1135,6 +1135,103 @@ def test_scene_material_texture_lists(device_type: spy.DeviceType) -> None:
         keep_alive.append((scene, material, texture_handles))
 
 
+def _materialx_coat_stack_document(coat_count: int) -> str:
+    """``coat_count`` coats over a diffuse base, each a reflection-only dielectric
+    layered over a transmission-only one (how MaterialX's LamaDielectric is built),
+    the coats mixed at 0.5. Coat ``i`` has IOR ``1.3 + 0.05 * i``."""
+    lines = ['<materialx version="1.39">']
+    lines.append(
+        '  <oren_nayar_diffuse_bsdf name="base" type="BSDF">'
+        '<input name="color" type="color3" value="0.5, 0.5, 0.5" /></oren_nayar_diffuse_bsdf>'
+    )
+    previous = None
+    for i in range(coat_count):
+        ior = 1.3 + 0.05 * i
+        for mode, name in (("R", f"r{i}"), ("T", f"t{i}")):
+            lines.append(
+                f'  <dielectric_bsdf name="{name}" type="BSDF">'
+                f'<input name="ior" type="float" value="{ior}" />'
+                '<input name="roughness" type="vector2" value="0.2, 0.2" />'
+                f'<input name="scatter_mode" type="string" value="{mode}" /></dielectric_bsdf>'
+            )
+        lines.append(
+            f'  <layer name="tl{i}" type="BSDF"><input name="top" type="BSDF" nodename="t{i}" />'
+            '<input name="base" type="BSDF" nodename="base" /></layer>'
+        )
+        lines.append(
+            f'  <layer name="coat{i}" type="BSDF"><input name="top" type="BSDF" nodename="r{i}" />'
+            f'<input name="base" type="BSDF" nodename="tl{i}" /></layer>'
+        )
+        if previous is None:
+            previous = f"coat{i}"
+        else:
+            lines.append(
+                f'  <mix name="m{i}" type="BSDF"><input name="fg" type="BSDF" nodename="coat{i}" />'
+                f'<input name="bg" type="BSDF" nodename="{previous}" />'
+                '<input name="mix" type="float" value="0.5" /></mix>'
+            )
+            previous = f"m{i}"
+    lines += [
+        f'  <surface name="shader" type="surfaceshader"><input name="bsdf" type="BSDF" nodename="{previous}" /></surface>',
+        '  <surfacematerial name="material" type="material">'
+        '<input name="surfaceshader" type="surfaceshader" nodename="shader" /></surfacematerial>',
+        "</materialx>",
+    ]
+    return "\n".join(lines)
+
+
+@pytest.mark.parametrize("device_type", helpers.DEFAULT_DEVICE_TYPES)
+@pytest.mark.parametrize(
+    "layering_mode",
+    [f2.MaterialXLayeringMode.bsdf_mix, f2.MaterialXLayeringMode.closure_tree],
+)
+def test_coat_pass_through_leaves_take_no_property_slot(
+    device_type: spy.DeviceType, layering_mode: f2.MaterialXLayeringMode
+) -> None:
+    # Twelve coats over one base: 25 leaves, of which the twelve transmission-only
+    # coat lobes report nothing (no reflection; their transmission continues to
+    # the base). Without the exclusion the reporting leaves overran the
+    # sixteen ExtraBsdfProperties slots; with it, 13 slots hold every one.
+    _skip_materialx_on_cuda(device_type, f2.MaterialXMaterial)
+    coat_count = 12
+    device = helpers.get_device(device_type)
+    scene = f2.Scene.create(device)
+    material = scene.create_material(
+        f2.MaterialXMaterial,
+        f2.Properties(
+            {
+                "mtlx_buffer": _materialx_coat_stack_document(coat_count),
+                "mtlx_node_name": "material",
+                "mtlx_layering_mode": layering_mode,
+            }
+        ),
+    )
+    scene.update()
+
+    module, helper = load_scene_sampling_module(device, scene)
+    extra_func = (
+        module["material_collect_extra_bsdf_properties_simple"].as_func().write(helper.bind_scene)
+    )
+    uvs = np.array([(0.5, 0.5)], dtype=np.float32)
+    wi = np.array([(0.0, 1.0, 0.0)], dtype=np.float32)
+    extra = cast(spy.Tensor, extra_func(material, uvs, wi, wi))
+    cursor = extra.cursor()
+    cursor.load()
+    result = cursor[0].read()
+
+    count = int(result["bsdf_count"])
+    assert count == coat_count + 1
+    # Each coat's reflection lobe reports its own normal-incidence F0, distinct by
+    # IOR, and the base reports its diffuse albedo; no slot is empty.
+    expected_f0 = sorted(((1.3 + 0.05 * i - 1.0) / (1.3 + 0.05 * i + 1.0)) ** 2 for i in range(coat_count))
+    albedos = [float(result["bsdf_albedo"][i].x) for i in range(count)]
+    kinds = [float(result["bsdf_kind"][i]) for i in range(count)]
+    assert all(kind != 0.0 for kind in kinds)
+    dielectric = sorted(a for a, k in zip(albedos, kinds) if a < 0.2)
+    assert dielectric == pytest.approx(expected_f0, rel=0.15)
+    assert max(albedos) == pytest.approx(0.5, abs=0.02)
+
+
 @pytest.mark.parametrize("device_type", helpers.DEFAULT_DEVICE_TYPES)
 def test_scene_material_cursor_writers(device_type: spy.DeviceType) -> None:
     device = helpers.get_device(device_type)

@@ -912,12 +912,21 @@ std::string emit_bsdf_mix_root_bsdf(const MxFlatRootDesc& desc)
         "public float3 collect_extra_bsdf_properties(inout ExtraBsdfProperties result, inout int reported_count, const "
         "MxExtraBsdfPropertiesContext ctx)"
     );
+    std::size_t reporting_count = 0;
+    for (const MxFlatBsdfDesc& bsdf : desc.bsdfs)
+        reporting_count += bsdf.extra_property_slot >= 0 ? 1 : 0;
     for (size_t i = 0; i < desc.bsdfs.size(); ++i) {
-        if (i >= k_extra_bsdf_properties_max_bsdf_count) {
-            e.line("reported_count = max(reported_count, " + std::to_string(desc.bsdfs.size()) + ")");
+        // A leaf with nothing to report takes no slot; the rows are indexed by
+        // slot, which the BSDF index no longer equals.
+        const int slot_index = desc.bsdfs[i].extra_property_slot;
+        if (slot_index < 0)
+            continue;
+        if (std::size_t(slot_index) >= k_extra_bsdf_properties_max_bsdf_count) {
+            e.line("reported_count = max(reported_count, " + std::to_string(reporting_count) + ")");
             break;
         }
         const int bsdf_index = int(i);
+        const std::string slot = std::to_string(slot_index);
         e.line("{", false);
         e.line("    const float3 local_wi = " + bsdf_frame_field(bsdf_index) + ".to_local(ctx.wi_adjusted)");
         const MxFlatBsdfDesc& bsdf = desc.bsdfs[i];
@@ -944,9 +953,9 @@ std::string emit_bsdf_mix_root_bsdf(const MxFlatRootDesc& desc)
             "    RoughnessInformation " + eval_roughness + " = " + desc.bsdfs[i].field_name
             + ".eval_roughness(local_wi)"
         );
-        e.line("    result.bsdf_N[" + std::to_string(i) + "] = " + bsdf_frame_field(bsdf_index) + ".normal");
-        e.line("    result.bsdf_T[" + std::to_string(i) + "] = " + bsdf_frame_field(bsdf_index) + ".tangent");
-        e.line("    result.bsdf_B[" + std::to_string(i) + "] = " + bsdf_frame_field(bsdf_index) + ".bitangent");
+        e.line("    result.bsdf_N[" + slot + "] = " + bsdf_frame_field(bsdf_index) + ".normal");
+        e.line("    result.bsdf_T[" + slot + "] = " + bsdf_frame_field(bsdf_index) + ".tangent");
+        e.line("    result.bsdf_B[" + slot + "] = " + bsdf_frame_field(bsdf_index) + ".bitangent");
         // Reflection-only albedo row, with through-material transmission on its
         // own row — the same split the closure_tree collector makes, so both
         // roots report an RT dielectric's interface readably. The row is gated
@@ -955,21 +964,21 @@ std::string emit_bsdf_mix_root_bsdf(const MxFlatRootDesc& desc)
         // transmissive lobe layered over another BSDF is a coat whose
         // transmission continues to the layers beneath, not light leaving the
         // material, and reporting it made a Lama-coated conductor read as glass.
-        e.line("    result.bsdf_albedo[" + std::to_string(i) + "] = " + eval_albedo + ".reflection");
+        e.line("    result.bsdf_albedo[" + slot + "] = " + eval_albedo + ".reflection");
         e.line(
-            "    result.bsdf_transmission[" + std::to_string(i) + "] = "
+            "    result.bsdf_transmission[" + slot + "] = "
             + (bsdf.through_material_transmissive ? compatibility_albedo + ".material_instance_transmission"
                                                   : std::string("float3(0.0)"))
         );
         e.line(
-            "    result.bsdf_weight[" + std::to_string(i) + "] += ctx.closure_weight * " + bsdf_weight_field(bsdf_index)
+            "    result.bsdf_weight[" + slot + "] += ctx.closure_weight * " + bsdf_weight_field(bsdf_index)
         );
-        e.line("    result.bsdf_roughness[" + std::to_string(i) + "] = " + eval_roughness + ".roughness");
-        e.line("    result.bsdf_scratch[" + std::to_string(i) + "] = " + eval_roughness + ".scratch");
-        e.line("    result.bsdf_extinction[" + std::to_string(i) + "] = " + eval_roughness + ".extinction");
-        e.line("    result.bsdf_ior[" + std::to_string(i) + "] = " + eval_roughness + ".ior");
-        e.line("    result.bsdf_kind[" + std::to_string(i) + "] = " + eval_roughness + ".kind");
-        e.line("    reported_count = max(reported_count, " + std::to_string(i + 1) + ")");
+        e.line("    result.bsdf_roughness[" + slot + "] = " + eval_roughness + ".roughness");
+        e.line("    result.bsdf_scratch[" + slot + "] = " + eval_roughness + ".scratch");
+        e.line("    result.bsdf_extinction[" + slot + "] = " + eval_roughness + ".extinction");
+        e.line("    result.bsdf_ior[" + slot + "] = " + eval_roughness + ".ior");
+        e.line("    result.bsdf_kind[" + slot + "] = " + eval_roughness + ".kind");
+        e.line("    reported_count = max(reported_count, " + std::to_string(slot_index + 1) + ")");
         e.line("}", false);
     }
     e.line("return float3(0.0)");

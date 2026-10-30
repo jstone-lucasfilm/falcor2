@@ -60,6 +60,9 @@ struct MxFlatBsdfDesc {
     // beneath it (a coat). The layering analysis decides it from the stack's
     // shape; the property report's transmission row is gated on it.
     bool through_material_transmissive = false;
+    // This BSDF's ExtraBsdfProperties slot, or -1 where it reports nothing
+    // (extra_bsdf_property_slots in layering_analysis.h).
+    int extra_property_slot = -1;
 };
 
 struct MxFlatCombinerDesc {

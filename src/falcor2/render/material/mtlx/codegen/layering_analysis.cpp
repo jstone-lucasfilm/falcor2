@@ -637,6 +637,13 @@ void classify_layering(
     // reflection and its base -- and reporting it as through-material made a
     // Lama-coated conductor read as a clear glass.
     clear_through_material_transmission_over_bsdf_bases(desc);
+
+    // What remains of a transmission-only lobe once its transmission continues to
+    // the base reports zero on every ExtraBsdfProperties row a consumer reads,
+    // so it gives up its property slot. Every LamaDielectric contributes one.
+    for (LayeringDesc::BsdfDesc& bsdf : desc.bsdfs)
+        bsdf.reports_no_properties = bsdf.transmissive && !bsdf.through_material_transmissive
+            && bsdf.lobe_types == "BSDFFlags::glossy_transmission";
 }
 
 namespace {
@@ -731,6 +738,16 @@ void lower_weighted_layers_to_layers_for_emission(LayeringDesc& desc)
 bool is_unity_layer_pass_through_transmission_bsdf(const LayeringDesc::BsdfDesc& bsdf)
 {
     return bsdf.node_impl == k_surface_unlit_transparent_impl;
+}
+
+std::vector<int> extra_bsdf_property_slots(const LayeringDesc& desc)
+{
+    std::vector<int> slots;
+    slots.reserve(desc.bsdfs.size());
+    int next = 0;
+    for (const LayeringDesc::BsdfDesc& bsdf : desc.bsdfs)
+        slots.push_back(bsdf.reports_no_properties ? -1 : next++);
+    return slots;
 }
 
 } // namespace mtlx

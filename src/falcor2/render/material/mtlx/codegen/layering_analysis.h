@@ -100,6 +100,13 @@ struct LayeringDesc {
         std::string lobe_types;
         bool transmissive = false;
         bool through_material_transmissive = false;
+        // A leaf with nothing to report through collect_extra_bsdf_properties: a
+        // transmission-only lobe whose transmission continues to a BSDF beneath it
+        // (a coat's pass-through). It reflects nothing, so its albedo row is zero,
+        // and its transmission row is gated off as not leaving the material. It
+        // still renders, but takes no ExtraBsdfProperties slot, which are limited
+        // to max_bsdf_count. Set by classify_layering.
+        bool reports_no_properties = false;
         bool preserve_tangent_frame = false;
         bool has_microfacet_selection = false;
         int fresnel_selection = 0;
@@ -146,6 +153,12 @@ void classify_layering(
 // into the top input edge. Only that edge requires single-use protection; other
 // shared composition refs remain legal.
 void validate_weighted_layer_top_refs_are_not_shared(const LayeringDesc& desc);
+
+// Each BSDF's ExtraBsdfProperties slot, by BSDF index in order of desc.bsdfs, or
+// -1 for a BSDF that reports_no_properties. Slots are dense: a reporting BSDF
+// takes the next free one, so leaves with nothing to report do not use up the
+// max_bsdf_count slots the reporting ones need.
+std::vector<int> extra_bsdf_property_slots(const LayeringDesc& desc);
 
 // Clears through_material_transmissive on every transmissive BSDF that sits in
 // the top branch of a layer whose base is a BSDF: its transmission continues to

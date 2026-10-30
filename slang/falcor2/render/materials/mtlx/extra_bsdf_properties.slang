@@ -14,17 +14,23 @@ public struct MxExtraBsdfPropertiesContext
     public float3 wi_adjusted;
     // Accumulated closure weight from the root to the current leaf.
     public float3 closure_weight;
+    // Leaf visits the table maps. Visits outnumber slots for two reasons: the
+    // leaves with nothing to report (one per LamaDielectric) take none, and a
+    // leaf shared by several branches (the base under a stack of coats) is
+    // visited once per branch into its one slot. Each entry is one int.
+    public static const int max_leaf_visits = 4 * ExtraBsdfProperties::max_bsdf_count;
     // Current leaf visit during recursive closure_tree reporting.
     public int leaf_visit_index;
-    // Maps recursive leaf visit order to result BSDF slot indices.
-    public int leaf_visit_to_bsdf_index[ExtraBsdfProperties::max_bsdf_count];
+    // Maps recursive leaf visit order to result BSDF slot indices; -1 for a leaf
+    // that reports nothing and takes no slot.
+    public int leaf_visit_to_bsdf_index[max_leaf_visits];
 
     public __init()
     {
         wi_adjusted = float3(0.0);
         closure_weight = float3(1.0);
         leaf_visit_index = 0;
-        for (int i = 0; i < ExtraBsdfProperties::max_bsdf_count; ++i)
+        for (int i = 0; i < max_leaf_visits; ++i)
             leaf_visit_to_bsdf_index[i] = i;
     }
 }
@@ -130,10 +136,14 @@ public extension<Inner> mtlx::MxFramedWeightedBSDF<Inner> : mtlx::IMxExtraBsdfPr
     )
     {
         const int leaf_visit_index = ctx.leaf_visit_index++;
-        const int bsdf_index = leaf_visit_index < ExtraBsdfProperties::max_bsdf_count
+        const int bsdf_index = leaf_visit_index < mtlx::MxExtraBsdfPropertiesContext::max_leaf_visits
             ? ctx.leaf_visit_to_bsdf_index[leaf_visit_index]
             : leaf_visit_index;
         const float3 local_wi = this.frame.to_local(ctx.wi_adjusted);
+        // A leaf with nothing to report takes no slot, but still passes its share
+        // of the light to the leaves beneath.
+        if (bsdf_index < 0)
+            return saturate(this.weight * this.inner.layer_opacity(local_wi));
         reported_count = max(reported_count, bsdf_index + 1);
         if (bsdf_index >= ExtraBsdfProperties::max_bsdf_count)
             return saturate(this.weight * this.inner.layer_opacity(local_wi));
