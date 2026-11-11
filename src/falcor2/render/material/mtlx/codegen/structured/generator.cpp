@@ -1424,13 +1424,17 @@ std::unique_ptr<CodeGenResult> generate_impl(const CodeGenDesc& desc, CodeGenCac
 
     // Search roots already point inside the installed libraries.
     resources.context->getOptions().libraryPrefix = mx::FilePath();
-    // Keep MaterialX's hardware mix-to-weighted-leaves-plus-add rewrite. Besides
-    // its original raster benefit, this folds mix factors into generated leaf
-    // weights and substantially simplifies the structured flat-weight programs.
-    // Add traversal below deliberately preserves the rewritten in1/in2 order:
-    // sampling therefore differs from OSL's native mix CDF order, while eval/pdf
-    // remain equivalent. Do not infer the old mix order from generated node names.
-    resources.context->getOptions().premultipliedBsdfAdd = true;
+    // Keep a BSDF mix as a mix. MaterialX's premultipliedBsdfAdd refactor lowers a
+    // mix with a connected amount to add(multiply(fg, amount), multiply(bg, 1 - amount)),
+    // and folds each factor into the operand's own weight input in place. Where
+    // one closure reaches the mix twice, as the base of
+    // mix(layer(top, base), base, amount) does, the bg path's 1 - amount then
+    // also scales the copy inside the layer, and two nested instances drive that
+    // base to zero. Inside a nodegraph every interface-driven amount is
+    // connected, so a nodegraph instance and the same graph written inline
+    // disagreed (test_materialx_shared_bsdf_input.py). Both layering modes
+    // compose a mix natively.
+    resources.context->getOptions().premultipliedBsdfAdd = false;
     resources.shader_generator->setColorManagementSystem(
         mx::DefaultColorManagementSystem::create(GenslangPtShaderGenerator::TARGET)
     );
@@ -1583,6 +1587,9 @@ std::unique_ptr<CodeGenResult> generate_impl(const CodeGenDesc& desc, CodeGenCac
     analysis.node_emission_facts.combiner_count = layering.combiners.size();
     for (const ClassifiedLayering::BsdfDesc& bsdf : layering.bsdfs) {
         analysis.node_emission_facts.bsdf_types.push_back(bsdf.bsdf_type);
+        analysis.node_emission_facts.bsdf_leaves.push_back(
+            {bsdf.shader_node, bsdf.transmissive && !bsdf.through_material_transmissive}
+        );
         if (bsdf.microfacet_selection) {
             FALCOR_CHECK(
                 bsdf.bsdf_type == microfacet_bsdf_type(*bsdf.microfacet_selection),

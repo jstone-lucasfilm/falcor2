@@ -580,7 +580,65 @@ ClassifiedLayering LayeringWalker::build_and_classify(
         bsdf.preserve_tangent_frame = info->preserve_tangent_frame;
     }
     reconcile_shared_microfacet_nodes(result.bsdfs);
+
+    // A transmissive lobe transmits *through the material* only where nothing
+    // lies beneath it: layered over a VDF or over nothing, it is the surface
+    // boundary of an interior medium. Layered over another BSDF, the light it
+    // transmits continues to the layers beneath (the specification's
+    // vertical-layering model: T_top passes to the base), so it is a coat, and
+    // its transmission is not light leaving the material. Every LamaDielectric
+    // coat is this case -- a transmission-only lobe standing between the coat's
+    // reflection and its base -- and reporting it as through-material made a
+    // Lama-coated conductor read as a clear glass.
+    clear_through_material_transmission_over_bsdf_bases(result);
+
+    // What remains of a transmission-only lobe once its transmission continues to
+    // the base reports zero on every ExtraBsdfProperties row a consumer reads,
+    // so it gives up its property row. Every LamaDielectric contributes one.
+    for (ClassifiedLayering::BsdfDesc& bsdf : result.bsdfs)
+        bsdf.reports_no_properties = bsdf.transmissive && !bsdf.through_material_transmissive
+            && bsdf.lobe_flags == BsdfLobeFlags::glossy_transmission;
     return result;
+}
+
+namespace {
+
+void clear_through_material_transmission_in_branch(
+    ClassifiedLayering& layering,
+    ClosureRef ref,
+    bool has_bsdf_beneath,
+    std::set<std::pair<ClosureRef, bool>>& visited
+)
+{
+    // A closure shared between branches is visited once per context, because a
+    // base beneath one use says nothing about the other.
+    if (ref.is_none() || !visited.insert({ref, has_bsdf_beneath}).second)
+        return;
+    if (ref.is_bsdf()) {
+        if (has_bsdf_beneath)
+            layering.bsdfs[ref.bsdf_index()].through_material_transmissive = false;
+        return;
+    }
+    const ClassifiedLayering::CombinerDesc& combiner = layering.combiners[ref.combiner_index()];
+    const bool is_layer = combiner.mode == CombinerMode::layer || combiner.mode == CombinerMode::weighted_layer;
+    // children[0] is the top of a layer; a connected children[1] is a BSDF base
+    // (a VDF base is a pass-through of its top and never forms a combiner).
+    const bool top_has_base = is_layer && !combiner.children[1].is_none();
+    clear_through_material_transmission_in_branch(
+        layering,
+        combiner.children[0],
+        has_bsdf_beneath || top_has_base,
+        visited
+    );
+    clear_through_material_transmission_in_branch(layering, combiner.children[1], has_bsdf_beneath, visited);
+}
+
+} // namespace
+
+void clear_through_material_transmission_over_bsdf_bases(ClassifiedLayering& layering)
+{
+    std::set<std::pair<ClosureRef, bool>> visited;
+    clear_through_material_transmission_in_branch(layering, layering.main_layer, false, visited);
 }
 
 BsdfLobeFlags reachable_lobe_flags(const ClassifiedLayering& layering, ClosureRef root)
@@ -601,13 +659,14 @@ std::string format_bsdf_lobe_flags(BsdfLobeFlags flags)
     // Keep the lexical ordering and left-associated parentheses produced by
     // the former std::set<string> implementation so this typed host cleanup
     // remains byte-identical at the Slang emission boundary.
-    static constexpr std::array<std::pair<BsdfLobeFlags, std::string_view>, 6> LOBES = {{
+    static constexpr std::array<std::pair<BsdfLobeFlags, std::string_view>, 7> LOBES = {{
         {BsdfLobeFlags::delta_transmission, "BSDFFlags::delta_transmission"},
         {BsdfLobeFlags::diffuse_reflection, "BSDFFlags::diffuse_reflection"},
         {BsdfLobeFlags::diffuse_transmission, "BSDFFlags::diffuse_transmission"},
         {BsdfLobeFlags::glossy_curve, "BSDFFlags::glossy_curve"},
         {BsdfLobeFlags::glossy_reflection, "BSDFFlags::glossy_reflection"},
         {BsdfLobeFlags::glossy_transmission, "BSDFFlags::glossy_transmission"},
+        {BsdfLobeFlags::subsurface, "BSDFFlags::subsurface"},
     }};
 
     std::string result;
@@ -616,6 +675,16 @@ std::string format_bsdf_lobe_flags(BsdfLobeFlags flags)
             result = result.empty() ? std::string(spelling) : "(" + result + " | " + std::string(spelling) + ")";
     }
     return result;
+}
+
+std::vector<int> extra_bsdf_property_rows(const ClassifiedLayering& layering)
+{
+    std::vector<int> rows;
+    rows.reserve(layering.bsdfs.size());
+    int next = 0;
+    for (const ClassifiedLayering::BsdfDesc& bsdf : layering.bsdfs)
+        rows.push_back(bsdf.reports_no_properties ? EXTRA_BSDF_NO_ROW : next++);
+    return rows;
 }
 
 void validate_weighted_layer_top_refs_are_not_shared(const ClassifiedLayering& layering)

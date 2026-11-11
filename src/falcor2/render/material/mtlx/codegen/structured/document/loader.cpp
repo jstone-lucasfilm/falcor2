@@ -11,6 +11,8 @@
 #include "falcor2/core/platform.h"
 #include "falcor2/render/material_aov_registry.h"
 
+#include <sgl/core/platform.h>
+
 #include <MaterialXCore/Definition.h>
 #include <MaterialXCore/Node.h>
 #include <MaterialXCore/Types.h>
@@ -22,6 +24,8 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <optional>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -561,6 +565,83 @@ bool load_libraries_if_present(
     return loaded;
 }
 
+/// Environment variable naming custom node library roots, separated as PATH is.
+constexpr const char* CUSTOM_LIBRARY_PATH_ENV_VAR = "FALCOR_MTLX_LIBRARY_PATH";
+
+/// Split a path list on the platform separator, dropping empty entries.
+std::vector<std::filesystem::path> split_path_list(std::string_view value)
+{
+#ifdef _WIN32
+    constexpr char separator = ';';
+#else
+    constexpr char separator = ':';
+#endif
+    std::vector<std::filesystem::path> paths;
+    size_t start = 0;
+    while (start <= value.size()) {
+        const size_t end = std::min(value.find(separator, start), value.size());
+        if (end > start)
+            paths.emplace_back(std::string(value.substr(start, end - start)));
+        start = end + 1;
+    }
+    return paths;
+}
+
+/// The application's custom node library roots: the request's, then the
+/// environment's. Each must be a directory.
+std::vector<std::filesystem::path> custom_library_roots(const CodeGenDesc& desc)
+{
+    std::vector<std::filesystem::path> roots = desc.library_paths;
+    if (const std::optional<std::string> env = sgl::platform::get_environment_variable(CUSTOM_LIBRARY_PATH_ENV_VAR)) {
+        for (std::filesystem::path& root : split_path_list(*env))
+            roots.push_back(std::move(root));
+    }
+    for (const std::filesystem::path& root : roots) {
+        FALCOR_CHECK(
+            std::filesystem::is_directory(root),
+            "MaterialX custom library path `{}` is not a directory.",
+            root.string()
+        );
+    }
+    return roots;
+}
+
+/// Import custom node libraries: definitions every document may instantiate
+/// without an XInclude, as a DCC registers its custom nodes. Each root is loaded
+/// whole, recursively, after the built-in libraries, so a custom library cannot
+/// replace a standard definition.
+void import_custom_libraries(const mx::DocumentPtr& document, const std::vector<std::filesystem::path>& roots)
+{
+    if (roots.empty())
+        return;
+    std::unordered_set<const mx::Implementation*> implementations_before;
+    for (const mx::ImplementationPtr& implementation : document->getImplementations())
+        implementations_before.insert(implementation.get());
+
+    // A custom library's nodegraphs are the application's, not ours: they stay
+    // out of the built-in set, as a document's own nodegraphs do.
+    std::unordered_set<const mx::NodeGraph*> custom_node_graphs;
+    for (const std::filesystem::path& root : roots) {
+        // Named as the one folder to load, so MaterialX's own environment
+        // search path is not scanned in its place.
+        load_libraries_if_present(document, root, {"."}, custom_node_graphs);
+    }
+
+    // Custom libraries define nodes by nodegraph. Shader source belongs to our
+    // libraries, as it does for material documents (load_and_validate_document).
+    for (const mx::ImplementationPtr& implementation : document->getImplementations()) {
+        if (implementations_before.contains(implementation.get()))
+            continue;
+        FALCOR_CHECK(
+            !implementation->hasAttribute("sourcecode") && !implementation->hasFile(),
+            "MaterialX source implementation '{}' is unsupported in custom libraries. "
+            "Shader source must be provided by the MaterialX library; custom libraries may define nodes by "
+            "nodegraph.",
+            implementation->getName()
+        );
+    }
+}
+
 // Attached libraries have different lookup precedence from imported copies.
 // Keep custom definitions, includes and document-wide context on the private path.
 bool can_share_libraries(
@@ -612,8 +693,12 @@ import_libraries(const mx::DocumentPtr& document, const CodeGenDesc& desc, bool 
         libraries = cached;
     }
 
+    // Custom libraries are imported into the document, so a document that uses
+    // them takes the private path below rather than the shared prepared library.
+    const std::vector<std::filesystem::path> custom_roots = custom_library_roots(desc);
+
     std::unordered_set<const mx::NodeGraph*> builtin_node_graphs;
-    if (!has_includes && libraries.standard && libraries.falcor
+    if (!has_includes && custom_roots.empty() && libraries.standard && libraries.falcor
         && can_share_libraries(document, desc, libraries.standard, libraries.falcor)) {
         const auto prepare = [&](bool derivatives) -> mx::ConstDocumentPtr
         {
@@ -666,6 +751,7 @@ import_libraries(const mx::DocumentPtr& document, const CodeGenDesc& desc, bool 
         builtin_node_graphs,
         libraries.falcor
     );
+    import_custom_libraries(document, custom_roots);
     return builtin_node_graphs;
 }
 

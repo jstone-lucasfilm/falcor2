@@ -2,14 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include <MaterialXCore/Generated.h>
+
 #include "../graph/static_input_query/static_input_query.h"
 
 #include <optional>
 
-namespace MaterialX_v1_39_5 {
+MATERIALX_NAMESPACE_BEGIN
 class ShaderGraph;
-} // namespace MaterialX_v1_39_5
-namespace MaterialX = MaterialX_v1_39_5;
+MATERIALX_NAMESPACE_END
 
 namespace falcor {
 namespace mtlx::structured {

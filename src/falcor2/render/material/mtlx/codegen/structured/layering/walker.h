@@ -122,6 +122,13 @@ struct ClassifiedLayering {
         std::optional<MxSheenSelection> sheen_selection;
         bool transmissive = false;
         bool through_material_transmissive = false;
+        // A leaf with nothing to report through collect_extra_bsdf_properties: a
+        // transmission-only lobe whose transmission continues to a BSDF beneath it
+        // (a coat's pass-through). It reflects nothing, so its albedo row is zero,
+        // and its transmission row is gated off as not leaving the material. It
+        // still renders, but takes no ExtraBsdfProperties row, which are limited
+        // to max_bsdf_count. Set by build_and_classify.
+        bool reports_no_properties = false;
         bool preserve_tangent_frame = false;
     };
 
@@ -166,6 +173,23 @@ BsdfLobeFlags reachable_lobe_flags(const ClassifiedLayering& layering, ClosureRe
 /// by the existing generated source. An empty mask produces an empty string so
 /// the emission site can retain its context-specific `none` or `all` fallback.
 std::string format_bsdf_lobe_flags(BsdfLobeFlags flags);
+
+/// Clear through_material_transmissive on every transmissive BSDF in the top
+/// branch of a layer whose base is a BSDF: its transmission continues to the
+/// layers beneath rather than leaving the material. Run by build_and_classify.
+void clear_through_material_transmission_over_bsdf_bases(ClassifiedLayering& layering);
+
+/// Row value of a BSDF that reports no properties; mirrors MX_EXTRA_BSDF_NO_ROW
+/// in extra_bsdf_properties.slang. Distinct from the -1 with which
+/// MxFramedWeightedBSDF selects its traversal-order compatibility path.
+inline constexpr int EXTRA_BSDF_NO_ROW = -2;
+
+/// Each BSDF's ExtraBsdfProperties row, by BSDF index in order of
+/// layering.bsdfs, or EXTRA_BSDF_NO_ROW for a BSDF that reports_no_properties.
+/// Rows are dense: a reporting BSDF takes the next free one, so leaves with
+/// nothing to report do not use up the max_bsdf_count rows the reporting ones
+/// need.
+std::vector<int> extra_bsdf_property_rows(const ClassifiedLayering& layering);
 
 /// Reject weighted layers whose top reference is shared, because lowering
 /// would otherwise change the semantics of another consumer.

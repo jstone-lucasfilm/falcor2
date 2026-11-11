@@ -45,6 +45,17 @@ struct NodeEmissionFacts {
     // representation owner. This is not a second closure IR: policies retain
     // composition, while common emission needs only scalar stack shape.
     std::vector<std::string> bsdf_types;
+    /// One entry per BSDF leaf, in bsdf_types order, which is the order the
+    /// generated code numbers its BSDFs in. A nodegraph used twice is emitted as
+    /// one shared function whose ShaderNode both leaves name, so facts that
+    /// differ between the two are recorded per leaf rather than per node.
+    struct BsdfLeaf {
+        const MaterialX::ShaderNode* shader_node = nullptr;
+        /// A transmissive lobe layered over another BSDF: its transmission
+        /// continues to the base instead of leaving the material.
+        bool transmission_continues_to_base = false;
+    };
+    std::vector<BsdfLeaf> bsdf_leaves;
     std::size_t combiner_count = 0;
     std::unordered_map<const MaterialX::ShaderNode*, MxMicrofacetSelection> microfacet_selections;
     std::unordered_map<const MaterialX::ShaderNode*, MxSheenSelection> sheen_selections;

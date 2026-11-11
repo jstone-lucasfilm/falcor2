@@ -73,6 +73,7 @@ public struct MXChiangHairMaterialInstance : IMaterialInstance
         result.bsdf_weight[0] = float3(1.0);
         result.bsdf_roughness[0] = bsdf.eval_roughness(wi).roughness;
         result.bsdf_scratch[0] = float3(0.0);
+        result.bsdf_kind[0] = k_bsdf_kind_hair;
         return result;
     }
 }

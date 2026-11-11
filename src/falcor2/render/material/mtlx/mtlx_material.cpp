@@ -15,6 +15,7 @@
 
 #include "falcor2/core/asset_resolver.h"
 
+#include <sgl/core/platform.h>
 #include <sgl/device/device.h>
 #include <sgl/core/string.h>
 #include <sgl/core/crypto.h>
@@ -387,6 +388,17 @@ ref<sgl::SlangModule> MaterialXMaterial::required_module() const
     return m_slang_module;
 }
 
+namespace {
+
+/// The custom library roots the environment names, as one string for the codegen hash,
+/// so a changed environment regenerates the material.
+std::string library_path_environment()
+{
+    return sgl::platform::get_environment_variable("FALCOR_MTLX_LIBRARY_PATH").value_or(std::string{});
+}
+
+} // namespace
+
 void MaterialXMaterial::run_codegen()
 {
     // If we are not forcing update and nothing has changed, bail out.
@@ -398,6 +410,8 @@ void MaterialXMaterial::run_codegen()
     size_t codegen_properties_hash = sgl::hash(
         m_mtlx_basepath,
         m_mtlx_search_paths,
+        m_mtlx_library_paths,
+        library_path_environment(),
         m_mtlx_editable_params,
         m_mtlx_canonicalize_names,
         m_mtlx_node_name,
@@ -447,6 +461,11 @@ void MaterialXMaterial::run_codegen()
     m_codegen_desc.document = document_desc;
     m_codegen_desc.node_name = m_mtlx_node_name;
     m_codegen_desc.asset_resolver = m_mtlx_path_resolver;
+    for (std::string_view root : sgl::string::split(m_mtlx_library_paths, ";")) {
+        root = trim_ascii_space(root);
+        if (!root.empty())
+            m_codegen_desc.library_paths.emplace_back(std::string(root));
+    }
     m_codegen_desc.positionfree_layering = (m_mtlx_layeringmethod == "positionfree");
     // Currently unused
     // m_codegen_desc.sigma_a;

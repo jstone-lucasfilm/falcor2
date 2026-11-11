@@ -87,8 +87,15 @@ void build_aliases_recursive(const ClassifiedLayering& layering, ClosureRef ref,
         const std::string alias = fmt::format("Bsdf{}", index);
         plan.core_aliases[ref] = layering.bsdfs[index].bsdf_type;
         plan.weighted_aliases[ref] = alias;
+        // The value generic is the leaf's ExtraBsdfProperties row, which skips
+        // the leaves with nothing to report (extra_bsdf_property_rows).
         plan.aliases.push_back(
-            {alias, fmt::format("MxFramedWeightedBSDF<{}, {}>", layering.bsdfs[index].bsdf_type, index)}
+            {alias,
+             fmt::format(
+                 "MxFramedWeightedBSDF<{}, {}>",
+                 layering.bsdfs[index].bsdf_type,
+                 extra_bsdf_property_rows(layering)[index]
+             )}
         );
         return;
     }
@@ -243,6 +250,7 @@ MxFlatRootDesc make_bsdf_mix_root_desc(const ClassifiedLayering& layering)
     result.type_name = "MxFlatRootBSDF_$HASH";
     result.root_ref = layering.main_layer;
     result.bsdfs.reserve(layering.bsdfs.size());
+    const std::vector<int> extra_rows = extra_bsdf_property_rows(layering);
     for (std::size_t i = 0; i < layering.bsdfs.size(); ++i) {
         const auto& bsdf = layering.bsdfs[i];
         result.bsdfs.push_back(
@@ -250,7 +258,9 @@ MxFlatRootDesc make_bsdf_mix_root_desc(const ClassifiedLayering& layering)
              bsdf.bsdf_type,
              bsdf_mix_layer_pass_through_albedo_mode(bsdf),
              bsdf_mix_layer_pass_through_transmission_mode(bsdf),
-             is_scatter_mode_bsdf(bsdf)}
+             is_scatter_mode_bsdf(bsdf),
+             bsdf.through_material_transmissive,
+             extra_rows[i]}
         );
     }
     result.combiners.reserve(layering.combiners.size());

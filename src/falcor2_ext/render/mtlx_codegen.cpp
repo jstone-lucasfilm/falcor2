@@ -23,12 +23,14 @@ namespace {
 
 nb::list discover_materialx_renderable_elements_impl(
     const std::filesystem::path& path,
-    falcor::ref<falcor::AssetResolver> asset_resolver
+    falcor::ref<falcor::AssetResolver> asset_resolver,
+    std::vector<std::filesystem::path> library_paths
 )
 {
     falcor::mtlx::CodeGenDesc desc;
     desc.document = path;
     desc.asset_resolver = std::move(asset_resolver);
+    desc.library_paths = std::move(library_paths);
 
     nb::list records;
     for (const falcor::mtlx::RenderableElement& element : falcor::mtlx::CodeGen::discover_renderable_elements(desc)) {
@@ -81,6 +83,8 @@ FALCOR_PY_EXPORT(render_mtlx_codegen)
         &discover_materialx_renderable_elements_impl,
         "path"_a,
         "asset_resolver"_a.none() = nb::none(),
-        "Discover renderable MaterialX elements and their MaterialX types."
+        "library_paths"_a = std::vector<std::filesystem::path>{},
+        "Discover renderable MaterialX elements and their MaterialX types. ``library_paths`` names "
+        "custom node library roots, loaded as ``MaterialXMaterial.mtlx_library_paths`` loads them."
     );
 }

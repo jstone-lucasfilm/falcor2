@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <MaterialXCore/Generated.h>
+
 #include "../../../codegen_types.h"
 #include "closure_pruning_counters.h"
 #include "../static_input_query/static_value_analysis.h"
@@ -11,11 +13,10 @@
 
 #include <cstdint>
 
-namespace MaterialX_v1_39_5 {
+MATERIALX_NAMESPACE_BEGIN
 class ShaderGraph;
 class GenContext;
-} // namespace MaterialX_v1_39_5
-namespace MaterialX = MaterialX_v1_39_5;
+MATERIALX_NAMESPACE_END
 
 namespace falcor {
 namespace mtlx::structured {

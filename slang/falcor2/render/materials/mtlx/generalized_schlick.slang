@@ -110,8 +110,32 @@ public struct MxCompensatedGeneralizedSchlickBSDF<
         float3 reflection;
         float3 transmission;
         if (!dorefr()) {
-            reflection = reflection_tint * (1.0 - E_ms);
-            transmission = float3(E_ms);
+            // The reflection-only transmission is the layer pass-through the
+            // generated bsdf_mix code reads, so it must obey the layering
+            // invariant: built from the F0/F90 that define this lobe's
+            // reflectance, not from the eta-keyed energy tables, and reduced
+            // to the achromatic scalar mean of genglsl's avgDirAlbedo -- an
+            // artistic tint's colour is absorption, not pass-through.
+            //
+            // The reflection row is the lobe's own Fresnel at the query angle,
+            // as the dielectric leaf reports it, so the property stream's
+            // normal-incidence query reads color0 at every roughness. Reporting
+            // the directional albedo here made it the analytic fit's F90 term at
+            // a sharp width and its energy loss at a rough one: +6% of color0 at
+            // alpha 0.0001 and -66% at alpha 1, which a consumer inverting it as
+            // an F0 reads as a reflectance error of that size. The pass-through
+            // below and layer_opacity keep the directional albedo, which is what
+            // the base actually receives (pass_through_albedo, which on a
+            // backfacing hit is the lobe's own, total internal reflection
+            // included).
+            // The bsdf_mix root also reads this row as the lobe's sample
+            // albedo, so it sets the share of samples a Schlick top draws: the
+            // estimator is unbiased under either value, and the old one
+            // oversampled a near-mirror top over transmission (the
+            // transmission isolate's render RMSE 0.1015 -> 0.0834 at 64 spp
+            // with its BSDF unchanged).
+            reflection = reflection_tint * fresnel.eval(abs(wi.z));
+            transmission = float3(1.0 - pass_through_albedo(wi));
         } else {
             const float3 F = fresnel.eval(abs(wi.z));
             reflection = F * (1.0 - E_ms) * reflection_tint;
@@ -130,17 +154,48 @@ public struct MxCompensatedGeneralizedSchlickBSDF<
 
     public RoughnessInformation eval_roughness(const float3 wi)
     {
-        return RoughnessInformation(roughness_xy, float3(0.0));
+        // A Schlick leaf has no complex ior, so the conductor rows carry its
+        // authored curve instead: extinction holds color90 and ior.x the
+        // exponent, the kind telling a consumer which reading applies. Without
+        // them the property stream saw only F0, and a textured color90 could
+        // only be recovered as a constant.
+        RoughnessInformation result = RoughnessInformation(
+            roughness_xy, float3(0.0), fresnel.schlick_color90(), float3(fresnel.schlick_exponent(), 0.0, 0.0)
+        );
+        result.kind = k_bsdf_kind_generalized_schlick;
+        return result;
     }
 
     public float3 directional_albedo(const float3 wi)
     {
-        return !dorefr() ? reflection_tint * (1.0 - layer_energy(wi)) : float3(1.0);
+        if (dorefr())
+            return float3(1.0);
+        // The same lobe pass_through_albedo measures, so a layer's top/base sample
+        // split and its base scale describe one energy budget on either face.
+        return reflection_tint * (backfacing ? reflection_albedo_estimate(wi) : layer_directional_albedo(wi));
     }
 
+    // The layering invariant: what this lobe does not reflect it hands down, so
+    // its opacity is its own directional albedo -- built from the F0/F90 that
+    // define its reflectance, not from the derived eta the energy tables key on
+    // (a dielectric model that never consults the Schlick colours, under which
+    // a lobe reflecting nothing still occluded everything beneath it). The
+    // reduction to a scalar mean and the exclusion of reflection_tint both
+    // match genglsl's avgDirAlbedo: transmittance is the untinted unreflected
+    // share, so an artistic tint's colour is absorption, not pass-through.
+    // eval_albedo's reflection-only transmission is 1 minus this same scalar,
+    // because the generated bsdf_mix layering reads the pass-through from
+    // there rather than from this method.
+    //
+    // The transmittance is over the reflection lobes alone (the specification's
+    // vertical-layering transmittance), so a transmissive scatter mode does not
+    // make the top opaque: a T-only lobe passes everything and an RT lobe passes
+    // what its reflection half does not reflect. See dielectric.slang.
     public float3 layer_opacity(const float3 wi)
     {
-        return dorefr() ? float3(1.0) : saturate(float3(1.0) - float3(layer_energy(wi)));
+        if (!dorefl())
+            return float3(0.0);
+        return saturate(float3(pass_through_albedo(wi)));
     }
 
     public property float3 ior_as_reflectance
@@ -155,6 +210,51 @@ public struct MxCompensatedGeneralizedSchlickBSDF<
     private bool dorefl() { return TScatter::dorefl(reflection_tint); }
 
     private bool dorefr() { return TScatter::dorefr(transmission_tint); }
+
+    private float3 layer_directional_albedo(const float3 wi)
+    {
+        return fresnel.layer_directional_albedo(abs(wi.z), microfacet_average_alpha(roughness_xy));
+    }
+
+    // The scalar share of incident light this reflection-only lobe keeps from the
+    // layers beneath it: the layer equation's E_top, reduced to the achromatic mean
+    // genglsl's avgDirAlbedo takes. On the front face it is the analytic albedo fit
+    // of F0/F90, as genglsl computes it. On a backfacing hit that fit is the wrong
+    // lobe: the Fresnel policy carries the inverted index there and reflects
+    // everything past the critical angle, so the lobe as it evaluates reflects far
+    // more than the front-face fit says, and a base beneath it was handed the
+    // difference as well -- light arriving from inside a Schlick-over-diffuse
+    // layer left with 1.30 of what arrived. The backfacing share is therefore
+    // the lobe's own directional albedo, estimated from its GGX distribution and
+    // Fresnel policy as dielectric.slang's reflection_albedo_estimate does, so the
+    // total internal reflection is smeared by the roughness exactly as the lobe
+    // smears it. Front-facing results are unchanged.
+    private float pass_through_albedo(const float3 wi)
+    {
+        if (!backfacing)
+            return dot(layer_directional_albedo(wi), float3(1.0 / 3.0));
+        return dot(reflection_albedo_estimate(wi), float3(1.0 / 3.0));
+    }
+
+    private float3 reflection_albedo_estimate(const float3 wi)
+    {
+        const float3 wi_up = float3(wi.x, wi.y, abs(wi.z));
+        MxGGXDist dist = make_ggx_dist(roughness_xy);
+        const float roughness = microfacet_roughness(roughness_xy);
+        float3 sum = float3(0.0);
+        for (uint k = 0; k < LAYER_ALBEDO_SAMPLES; ++k) {
+            const float2 rnd = hammersley_2d(k, LAYER_ALBEDO_SAMPLES);
+            const float3 m = dist.sample_for_refl(wi_up, rnd.x, rnd.y);
+            const float3 wo = reflect(-wi_up, m);
+            if (wo.z <= 0.0)
+                continue;
+            const float3 F = fresnel.eval(dot(m, wi_up));
+            sum += eval_ggx_reflection_lobe(
+                dist, F, TCompensation::reflection_scale(roughness, wi_up.z, F), wi_up, wo
+            ).weight;
+        }
+        return saturate(sum / float(LAYER_ALBEDO_SAMPLES));
+    }
 
     private float layer_energy(float3 wi)
     {

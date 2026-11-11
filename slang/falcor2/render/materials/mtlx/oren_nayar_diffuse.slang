@@ -85,7 +85,21 @@ public struct MxOrenNayarDiffuseBSDF : ILayerableBSDF
 
     public RoughnessInformation eval_roughness(const float3 wi)
     {
-        return RoughnessInformation(float2(0.5, 0.5), float3(0.0));
+        // The authored sigma, verbatim. The 0.5 discriminator this replaces
+        // existed because the property stream had no leaf-kind row and
+        // consumers identified a diffuse leaf by exactly that constant
+        // (measured: reporting the real roughness without a kind row took a
+        // control source's bake from exact to SMAPE 1.97). ``kind`` is the
+        // classification now, so the roughness is free to mean what it says --
+        // and burley_diffuse's verbatim report stops being an inconsistency.
+        RoughnessInformation result = RoughnessInformation(float2(roughness, roughness), float3(0.0));
+        result.kind = k_bsdf_kind_oren_nayar_diffuse;
+        // The ``energy_compensation`` flag in ``ior.x`` (1 compensated, 0 not),
+        // the row an Oren-Nayar leaf otherwise leaves at zero. The two lobes
+        // reflect different energy at the same colour and sigma, so a consumer
+        // translating between models that differ in the flag needs it.
+        result.ior = float3(energy_compensation ? 1.0 : 0.0, 0.0, 0.0);
+        return result;
     }
 
     public float3 directional_albedo(const float3 wi) { return albedo_value; }

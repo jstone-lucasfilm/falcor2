@@ -27,6 +27,11 @@ public struct $MxMaterialInstanceName : IMaterialInstance
         sample.pdf = bsdf_sample.pdf;
         sample.weight = bsdf_sample.weight;
         sample.flags = bsdf_sample.flags;
+        if (bsdf_sample.has_flag(BSDFFlags::subsurface)) {
+            sample.subsurface.albedo = bsdf_sample.subsurface_albedo;
+            sample.subsurface.radius = bsdf_sample.subsurface_radius;
+            sample.subsurface.anisotropy = bsdf_sample.subsurface_anisotropy;
+        }
         return valid;
     }
     public override bool is_emissive() { return any(emissive_radiance > 0.0); }

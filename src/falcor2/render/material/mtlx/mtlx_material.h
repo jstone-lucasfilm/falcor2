@@ -84,6 +84,15 @@ public:
                 reflection::on_change(&MaterialXMaterial::require_codegen)
             )
             .def_rw(
+                "mtlx_library_paths",
+                &MaterialXMaterial::m_mtlx_library_paths,
+                "Semicolon-separated roots of custom node libraries, loaded whole after the built-in "
+                "libraries so the document may instantiate their nodes without an XInclude. Roots in the "
+                "FALCOR_MTLX_LIBRARY_PATH environment variable follow these.",
+                reflection::default_value(std::string{}),
+                reflection::on_change(&MaterialXMaterial::require_codegen)
+            )
+            .def_rw(
                 "mtlx_path",
                 &MaterialXMaterial::m_mtlx_path,
                 "Path to MaterialX file, relative to mtlx_basepath.",
@@ -244,6 +253,7 @@ private:
     std::filesystem::path m_mtlx_basepath;
     std::string m_mtlx_buffer;
     std::string m_mtlx_search_paths;
+    std::string m_mtlx_library_paths;
     std::filesystem::path m_mtlx_path;
     std::string m_mtlx_editable_params;
     bool m_mtlx_canonicalize_names{false};

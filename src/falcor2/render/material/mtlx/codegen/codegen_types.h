@@ -168,6 +168,10 @@ struct CodeGenDesc {
     std::vector<std::string> additional_output_names = {"*"};
     /// Optional resolver used to resolve the document and MaterialX search paths.
     ref<AssetResolver> asset_resolver;
+    /// Custom node library roots, loaded whole after the built-in libraries so every
+    /// document may instantiate their nodes without an XInclude. The roots named by
+    /// the FALCOR_MTLX_LIBRARY_PATH environment variable follow these.
+    std::vector<std::filesystem::path> library_paths;
 
     /// Legacy position-free layering request. The structured generator rejects
     /// this until a layering policy implements it.

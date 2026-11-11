@@ -539,14 +539,18 @@ public struct MxLayerBSDF<Top : ILayerableBSDF, Base : ILayerableBSDF> : ILayera
     }
     public float3 layer_opacity(const float3 wi)
     {
-        // TODO(mtlx-layering): Validate this against MaterialX/OSL
-        // CompositeBSDF layer opacity semantics, not a physically combined
-        // coat opacity. When a
-        // layer() closure is used as the top of another layer(), MTLX
-        // traverses through the nested layer and returns the opacity of that
-        // nested layer's base branch. This preserves the bsdf_mix closure
-        // weights used by the composite BSDF preparation step.
-        return base.layer_opacity(wi);
+        // The specification composes a layer's vertical-layering transmittance
+        // as the product of its inputs' transmittances, T = T_top * T_base, so
+        // that layer(layer(a, b), c) and layer(a, layer(b, c)) occlude the layers
+        // beneath them identically. In opacity terms that is
+        // 1 - (1 - o_top)(1 - o_base) = o_top + (1 - o_top) o_base. Returning the
+        // base branch's opacity alone (the BSDL CompositeBSDF traversal this once
+        // mirrored) dropped the top's: a LamaLayer lowers its dielectric coat to
+        // layer(layer(R, T), base), and under the old rule the coat's reflection
+        // lobe attenuated nothing beneath it, so a coated conductor's base
+        // reported weight 1.0 and the grouped and ungrouped stacks disagreed by
+        // SMAPE 0.144 where the specification requires zero.
+        return saturate(top.layer_opacity(wi) + base_scale(wi) * base.layer_opacity(wi));
     }
     // TODO: Remove the eval()/eval_pdf() overrides below when
     // https://github.com/shader-slang/slang/issues/12814 is fixed.
@@ -597,7 +601,7 @@ public struct MxLayerBSDF<Top : ILayerableBSDF, Base : ILayerableBSDF> : ILayera
         bool valid = choice.first ? top.sample(wi, child_input, bc, sample) : base.sample(wi, child_input, bc, sample);
         if (!valid)
             return false;
-        if (sample.has_flag(BSDFFlags::delta)) {
+        if (sample.has_flag(BSDFFlags::delta) || sample.has_flag(BSDFFlags::subsurface)) {
             sample.pdf = choice.pdf * sample.pdf;
             sample.weight
                 = choice.first ? sample.weight * choice.inv_pdf : base_scale(wi) * sample.weight * choice.inv_pdf;
@@ -723,7 +727,7 @@ public struct MxMixBSDF<FG : ILayerableBSDF, BG : ILayerableBSDF> : ILayerableBS
         bool valid = choice.first ? bg.sample(wi, child_input, bc, sample) : fg.sample(wi, child_input, bc, sample);
         if (!valid)
             return false;
-        if (sample.has_flag(BSDFFlags::delta)) {
+        if (sample.has_flag(BSDFFlags::delta) || sample.has_flag(BSDFFlags::subsurface)) {
             sample.pdf = choice.pdf * sample.pdf;
             sample.weight = (choice.first ? float3(1.0) - mix_value : mix_value) * sample.weight * choice.inv_pdf;
             return true;
@@ -845,7 +849,7 @@ public struct MxAddBSDF<In1 : ILayerableBSDF, In2 : ILayerableBSDF> : ILayerable
         bool valid = choice.first ? in1.sample(wi, child_input, bc, sample) : in2.sample(wi, child_input, bc, sample);
         if (!valid)
             return false;
-        if (sample.has_flag(BSDFFlags::delta)) {
+        if (sample.has_flag(BSDFFlags::delta) || sample.has_flag(BSDFFlags::subsurface)) {
             sample.pdf = choice.pdf * sample.pdf;
             sample.weight *= choice.inv_pdf;
             return true;

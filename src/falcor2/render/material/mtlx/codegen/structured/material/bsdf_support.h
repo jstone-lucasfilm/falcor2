@@ -39,6 +39,9 @@ enum class BsdfLobeFlags : uint32_t {
     glossy_transmission = 1 << 3,
     glossy_curve = 1 << 4,
     delta_transmission = 1 << 5,
+    /// A sample that enters the surface for a path-traced subsurface walk
+    /// (BSDFFlags::subsurface).
+    subsurface = 1 << 6,
 };
 FALCOR_ENUM_CLASS_OPERATORS(BsdfLobeFlags);
 

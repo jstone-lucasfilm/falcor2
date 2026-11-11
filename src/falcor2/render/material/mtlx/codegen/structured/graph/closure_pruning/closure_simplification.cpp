@@ -40,6 +40,16 @@ std::string fresh_name(const mx::ShaderGraph& graph, const char* prefix)
     }
 }
 
+// Give a helper node's inputs unique variable names. An unconnected input with
+// a value is emitted as a local constant named after the input's variable, and
+// createNode leaves that as the NodeDef's generic identifier, so two helpers of
+// one kind in a graph (two clamps: `low`, `high`) would declare it twice.
+void name_helper_inputs(mx::ShaderNode& node)
+{
+    for (mx::ShaderInput* input : node.getInputs())
+        input->setVariable(input->getFullName());
+}
+
 // Pick the typed helpers needed to replace mix(live, empty, weight) with
 // multiply(live, saturate(weight)). The closure and weight types both matter:
 // MaterialX represents ordinary closure mixes with float weights, while the
@@ -161,6 +171,7 @@ bool rewrite_asymmetric_mix(
     // output receives a unique, target-safe name instead of its NodeDef's
     // generic `out` identifier.
     clamp_out->setVariable(clamp_out->getFullName());
+    name_helper_inputs(*clamp);
     wire_through(clamp_in, weight_input);
 
     const std::string mul_name = fresh_name(graph, "mul");
@@ -181,6 +192,7 @@ bool rewrite_asymmetric_mix(
         graph.getName()
     );
     mul_out->setVariable(mul_out->getFullName());
+    name_helper_inputs(*mul);
     mul_in1->makeConnection(kept_upstream);
 
     if (keep_fg) {
@@ -203,6 +215,7 @@ bool rewrite_asymmetric_mix(
             graph.getName()
         );
         inv_out->setVariable(inv_out->getFullName());
+        name_helper_inputs(*inv);
         inv_in->makeConnection(clamp_out);
         mul_in2->makeConnection(inv_out);
     }

@@ -16,6 +16,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace falcor::mtlx::structured {
 
@@ -52,12 +53,33 @@ public:
             "Structured MaterialX microfacet node '{}' has no resolved emission policy.",
             node.getName()
         );
+        // emit_bsdf_initialization assigns the BSDF index before it evaluates
+        // the weight and the constructor, so both may test it.
+        const TransmissionContinues continues
+            = transmission_continues_to_base(user_data->node_emission_facts(), node, output_name + ".get_index()");
+        std::string weight = input(node, "weight", context);
+        if (continues.any && m_kind != MxMicrofacetKind::conductor) {
+            // A transmission-only leaf over a BSDF base is pass-through and
+            // nothing else, so it is emitted at weight 0: its layer opacity is
+            // then 0 on both layering paths and the base receives everything,
+            // which a leaf with no lobe at all would not give (bsdf_mix would read
+            // its zero transmission as full opacity). An RT leaf keeps its weight
+            // and loses only its transmission tint (constructor).
+            const std::string scatter = input(node, "scatter_mode", context);
+            std::string coat_weight = weight;
+            if (found->second.scatter == MxScatterSelection::static_t)
+                coat_weight = "0.0";
+            else if (found->second.scatter == MxScatterSelection::runtime)
+                coat_weight = "((" + scatter + ") == 1 ? 0.0 : " + weight + ")";
+            weight
+                = continues.all ? coat_weight : "(" + continues.condition + " ? " + coat_weight + " : " + weight + ")";
+        }
         emit_bsdf_initialization(
             target,
             stage,
             output_name,
-            input(node, "weight", context),
-            constructor(node, context, found->second),
+            weight,
+            constructor(node, context, found->second, continues),
             normal,
             tangent
         );
@@ -101,7 +123,76 @@ private:
         FALCOR_UNREACHABLE();
     }
 
-    std::string constructor(const mx::ShaderNode& node, mx::GenContext& context, MxMicrofacetSelection selection) const
+    // Whether the layering analysis placed this node's transmission over another
+    // BSDF: a transmissive lobe in the top branch of a layer whose base is a BSDF.
+    // The specification's layering model passes such a lobe's transmission to the
+    // base, which every layer combiner already does through the top's
+    // layer_opacity (1 - E_R of its reflection lobes); the lobe itself therefore
+    // contributes no BTDF of its own. Emitting one as well transmitted the same
+    // light twice: once to the base as pass-through, and once through the
+    // surface into the object, which a path tracer then follows through closed
+    // geometry. Every LamaDielectric coat is this case.
+    //
+    // The verdict belongs to each *leaf* that names the node, not to the node: a
+    // nodegraph used twice (two LamaDielectrics, say) is emitted as one shared
+    // function whose ShaderNode both leaves report, and one can be a coat while
+    // the other is the glass beneath it. Leaves are told apart at runtime by
+    // their BSDF index, which follows the layering order.
+    struct TransmissionContinues {
+        // Expression true where this leaf's transmission continues to a base:
+        // a literal when every leaf agrees, else a test on the BSDF index.
+        std::string condition = "false";
+        bool any = false;
+        bool all = false;
+    };
+
+    static TransmissionContinues transmission_continues_to_base(
+        const NodeEmissionFacts& facts,
+        const mx::ShaderNode& node,
+        const std::string& index
+    )
+    {
+        std::vector<std::size_t> continuing;
+        std::size_t leaves = 0;
+        for (std::size_t i = 0; i < facts.bsdf_leaves.size(); ++i) {
+            if (facts.bsdf_leaves[i].shader_node != &node)
+                continue;
+            ++leaves;
+            if (facts.bsdf_leaves[i].transmission_continues_to_base)
+                continuing.push_back(i);
+        }
+        TransmissionContinues result;
+        result.any = !continuing.empty();
+        result.all = result.any && continuing.size() == leaves;
+        if (!result.any || result.all) {
+            result.condition = result.all ? "true" : "false";
+            return result;
+        }
+        result.condition.clear();
+        for (std::size_t i = 0; i < continuing.size(); ++i)
+            result.condition += fmt::format("{}({} == {})", i == 0 ? "(" : " || ", index, continuing[i]);
+        result.condition += ")";
+        return result;
+    }
+
+    // The transmission tint a leaf is constructed with: zero where its
+    // transmission continues to a base, the authored tint where it leaves the
+    // material, and a runtime choice where the shared function serves both.
+    static std::string continuing_transmission_tint(const TransmissionContinues& continues, const std::string& tint)
+    {
+        if (!continues.any)
+            return tint;
+        if (continues.all)
+            return "float3(0.0)";
+        return "(" + continues.condition + " ? float3(0.0) : " + tint + ")";
+    }
+
+    std::string constructor(
+        const mx::ShaderNode& node,
+        mx::GenContext& context,
+        MxMicrofacetSelection selection,
+        const TransmissionContinues& continues
+    ) const
     {
         FALCOR_CHECK(selection.kind == m_kind, "Structured MaterialX microfacet emitter received the wrong family.");
         const std::string type = microfacet_bsdf_type(selection);
@@ -114,10 +205,14 @@ private:
             const std::string scatter = input(node, "scatter_mode", context);
             const std::string ior = input(node, "ior", context);
             const std::string reflection = reflection_tint(selection.scatter, tint, scatter);
-            const std::string transmission = transmission_tint(selection.scatter, tint, scatter);
+            const std::string transmission
+                = continuing_transmission_tint(continues, transmission_tint(selection.scatter, tint, scatter));
+            // The raw authored ior goes through: the Fresnel constructors apply
+            // the BSDL boundary clamp internally, and they need the pre-clamp
+            // value to recognize an index-matched (ior = 1) interface.
             if (selection.fresnel == MxFresnelSelection::airy)
                 return fmt::format(
-                    "{}({}, MxDielectricAiryFresnel(clamp_dielectric_ior({}), !si.front_facing, {}, {}), {}, {}, "
+                    "{}({}, MxDielectricAiryFresnel({}, !si.front_facing, {}, {}), {}, {}, "
                     "float3(0.0), {}, !si.front_facing)",
                     type,
                     rough,
@@ -129,7 +224,7 @@ private:
                     retroreflective
                 );
             return fmt::format(
-                "{}({}, MxDielectricFresnel(clamp_dielectric_ior({}), !si.front_facing), {}, {}, float3(0.0), {}, "
+                "{}({}, MxDielectricFresnel({}, !si.front_facing), {}, {}, float3(0.0), {}, "
                 "!si.front_facing)",
                 type,
                 rough,
@@ -166,7 +261,8 @@ private:
         const std::string color90 = input(node, "color90", context);
         const std::string exponent = input(node, "exponent", context);
         const std::string reflection = reflection_tint(selection.scatter, "float3(1.0)", scatter);
-        const std::string transmission = transmission_tint(selection.scatter, "float3(1.0)", scatter);
+        const std::string transmission
+            = continuing_transmission_tint(continues, transmission_tint(selection.scatter, "float3(1.0)", scatter));
         if (selection.fresnel == MxFresnelSelection::airy)
             return fmt::format(
                 "{}({}, make_schlick_airy_fresnel({}, {}, {}, {}, !si.front_facing, {}, {}), {}, {}, {}, "
