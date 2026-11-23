@@ -20,6 +20,8 @@ add_library(falcor2_mtlx_codegen OBJECT
     structured/document/transforms.h
     structured/document/passes/default_geomprops.cpp
     structured/document/passes/default_geomprops.h
+    structured/document/passes/shared_closures.cpp
+    structured/document/passes/shared_closures.h
     structured/generator.cpp
     structured/generator.h
     structured/graph/closure_pruning/classify.cpp

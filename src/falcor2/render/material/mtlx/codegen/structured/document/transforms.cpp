@@ -3,6 +3,7 @@
 
 #include "transforms.h"
 #include "passes/default_geomprops.h"
+#include "passes/shared_closures.h"
 
 #include "falcor2/core/error.h"
 
@@ -26,6 +27,10 @@ void apply_document_transforms(
         static_cast<uint32_t>(unknown_passes)
     );
 
+    // Before geomprop materialization, so a copied closure's defaulted inputs are
+    // materialized like the original's.
+    if (is_set(requested, DocumentTransformPass::split_shared_closures_by_layering_context))
+        document_passes::split_shared_closures_by_layering_context(document, root);
     if (is_set(requested, DocumentTransformPass::materialize_default_geomprops))
         document_passes::materialize_default_geomprops(document, root, additional_outputs);
 

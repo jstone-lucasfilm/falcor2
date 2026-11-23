@@ -1385,7 +1385,10 @@ std::unique_ptr<CodeGenResult> generate_impl(const CodeGenDesc& desc, CodeGenCac
     // MaterialX normally supplies default geomprops implicitly. Materialize
     // them before ShaderGraph construction so graph optimization and static
     // analysis see the same explicit inputs as authored graph connections.
-    DocumentTransformPass transforms = DocumentTransformPass::materialize_default_geomprops;
+    // A BSDF shared between a layer's top and a use of its own is classified once
+    // per closure, so each of those contexts gets its own copy first.
+    DocumentTransformPass transforms = DocumentTransformPass::materialize_default_geomprops
+        | DocumentTransformPass::split_shared_closures_by_layering_context;
     const EditableInputPredicate is_editable = [&](const mx::Node& node, const std::string& name)
     {
         return desc.make_editable || desc.editable_param_names.contains(node.getNamePath() + "/" + name)

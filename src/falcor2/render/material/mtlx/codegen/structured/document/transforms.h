@@ -24,7 +24,8 @@ using MovedInputPaths = std::unordered_map<std::string, std::string>;
 enum class DocumentTransformPass : uint32_t {
     none = 0,
     materialize_default_geomprops = 1u << 0,
-    all = materialize_default_geomprops,
+    split_shared_closures_by_layering_context = 1u << 1,
+    all = materialize_default_geomprops | split_shared_closures_by_layering_context,
 };
 FALCOR_ENUM_CLASS_OPERATORS(DocumentTransformPass);
 SGL_ENUM_FLAGS_INFO(
@@ -32,6 +33,7 @@ SGL_ENUM_FLAGS_INFO(
     {
         {DocumentTransformPass::none, "none"},
         {DocumentTransformPass::materialize_default_geomprops, "materialize_default_geomprops"},
+        {DocumentTransformPass::split_shared_closures_by_layering_context, "split_shared_closures_by_layering_context"},
         {DocumentTransformPass::all, "all"},
     }
 );

@@ -1371,6 +1371,104 @@ def test_coat_pass_through_leaves_take_no_property_slot(
     assert max(albedos) == pytest.approx(0.5, abs=0.02)
 
 
+_SHARED_GLASS_IOR = 1.5
+
+# One glass, a reflection-only dielectric layered over a transmission-only one,
+# used twice: alone, as the background of a mix, and as the coat of a layer over
+# a diffuse base in its foreground.
+_SHARED_GLASS_DOCUMENT = f"""<?xml version="1.0"?>
+<materialx version="1.39">
+  <dielectric_bsdf name="r" type="BSDF">
+    <input name="ior" type="float" value="{_SHARED_GLASS_IOR}" />
+    <input name="roughness" type="vector2" value="0.2, 0.2" />
+    <input name="scatter_mode" type="string" value="R" />
+  </dielectric_bsdf>
+  <dielectric_bsdf name="t" type="BSDF">
+    <input name="ior" type="float" value="{_SHARED_GLASS_IOR}" />
+    <input name="roughness" type="vector2" value="0.2, 0.2" />
+    <input name="scatter_mode" type="string" value="T" />
+  </dielectric_bsdf>
+  <layer name="glass" type="BSDF">
+    <input name="top" type="BSDF" nodename="r" />
+    <input name="base" type="BSDF" nodename="t" />
+  </layer>
+  <oren_nayar_diffuse_bsdf name="base" type="BSDF">
+    <input name="color" type="color3" value="0.5, 0.5, 0.5" />
+  </oren_nayar_diffuse_bsdf>
+  <layer name="coated" type="BSDF">
+    <input name="top" type="BSDF" nodename="glass" />
+    <input name="base" type="BSDF" nodename="base" />
+  </layer>
+  <mix name="mixed" type="BSDF">
+    <input name="fg" type="BSDF" nodename="coated" />
+    <input name="bg" type="BSDF" nodename="glass" />
+    <input name="mix" type="float" value="0.75" />
+  </mix>
+  <surface name="surface1" type="surfaceshader">
+    <input name="bsdf" type="BSDF" nodename="mixed" />
+  </surface>
+  <surfacematerial name="material" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="surface1" />
+  </surfacematerial>
+</materialx>"""
+
+
+@pytest.mark.parametrize("device_type", helpers.DEFAULT_DEVICE_TYPES)
+@pytest.mark.parametrize(
+    "layering_mode",
+    [f2.MaterialXLayeringMode.bsdf_mix, f2.MaterialXLayeringMode.closure_tree],
+)
+def test_a_closure_shared_with_a_coat_still_transmits_on_its_own(
+    request: pytest.FixtureRequest,
+    device_type: spy.DeviceType,
+    layering_mode: f2.MaterialXLayeringMode,
+) -> None:
+    # The glass's transmission leaves the material where it stands alone and
+    # continues to the diffuse where it coats it. Each use is classified on its
+    # own: the lone glass's transmission-only lobe reports the light it sends
+    # through the material, 1 - F0 at normal incidence, while the coat's gives up
+    # its row. Classified once for both uses, the glass was a coat in both and
+    # no row reported any transmission.
+    _skip_materialx_on_cuda(
+        device_type, f2.MaterialXMaterial, nightly=bool(request.config.getoption("--nightly"))
+    )
+    device = helpers.get_device(device_type)
+    scene = f2.Scene.create(device)
+    material = scene.create_material(
+        f2.MaterialXMaterial,
+        f2.Properties(
+            {
+                "mtlx_buffer": _SHARED_GLASS_DOCUMENT,
+                "mtlx_node_name": "material",
+                "mtlx_layering_mode": layering_mode,
+            }
+        ),
+    )
+    scene.update()
+
+    module, helper = load_scene_sampling_module(device, scene)
+    extra_func = (
+        module["material_collect_extra_bsdf_properties_simple"].as_func().write(helper.bind_scene)
+    )
+    uvs = np.array([(0.5, 0.5)], dtype=np.float32)
+    wi = np.array([(0.0, 1.0, 0.0)], dtype=np.float32)
+    extra = cast(spy.Tensor, extra_func(material, uvs, wi, wi))
+    cursor = extra.cursor()
+    cursor.load()
+    result = cursor[0].read()
+
+    # r is the top of the glass's own layer in both uses, so the two glasses share
+    # it; the lone glass's t reports, the coat's t reports nothing, and the base
+    # reports its albedo. Classified once, the one t reported nothing: two rows.
+    count = int(result["bsdf_count"])
+    assert count == 3
+    transmissions = [float(result["bsdf_transmission"][i].x) for i in range(count)]
+    transmitting = [value for value in transmissions if value > 0.0]
+    f0 = ((_SHARED_GLASS_IOR - 1.0) / (_SHARED_GLASS_IOR + 1.0)) ** 2
+    assert len(transmitting) == 1
+    assert transmitting[0] == pytest.approx(1.0 - f0, abs=0.02)
+
+
 _SUBSURFACE_RADIUS = (0.4, 0.2, 0.1)
 
 _SUBSURFACE_UNDER_COAT = f"""<?xml version="1.0"?>
