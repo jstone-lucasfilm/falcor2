@@ -91,6 +91,73 @@ void set_vtx_boundary_interpolation(Sdc::Options& options, VertexBoundaryInterpo
     }
 }
 
+void set_triangle_subdivision(Sdc::Options& options, TriangleSubdivisionRule rule)
+{
+    switch (rule) {
+    case TriangleSubdivisionRule::catmull_clark:
+        options.SetTriangleSubdivision(Sdc::Options::TRI_SUB_CATMARK);
+        break;
+    case TriangleSubdivisionRule::smooth:
+        options.SetTriangleSubdivision(Sdc::Options::TRI_SUB_SMOOTH);
+        break;
+    }
+}
+
+/// Creases as OpenSubdiv's topology descriptor takes them: one vertex pair and one sharpness per edge.
+struct CreaseEdges {
+    std::vector<Far::Index> vertex_pairs;
+    std::vector<float> sharpnesses;
+};
+
+/// Expand the authored crease chains into edges. A chain of n vertices holds n - 1 edges, and its sharpness is
+/// given once per chain or once per edge, as UsdGeomMesh defines creaseSharpnesses.
+CreaseEdges get_crease_edges(const TessellatorInputMesh& input)
+{
+    CreaseEdges creases;
+    if (input.crease_lengths.empty())
+        return creases;
+
+    size_t vertex_total = 0;
+    size_t edge_total = 0;
+    for (const int length : input.crease_lengths) {
+        FALCOR_CHECK(length >= 2, "Mesh '{}' has a crease of fewer than two vertices", input.name);
+        vertex_total += size_t(length);
+        edge_total += size_t(length - 1);
+    }
+    FALCOR_CHECK(
+        vertex_total == input.crease_indices.size(),
+        "Mesh '{}' crease lengths sum to {} vertices, but {} crease indices are authored",
+        input.name,
+        vertex_total,
+        input.crease_indices.size()
+    );
+    const bool per_edge = input.crease_sharpnesses.size() == edge_total;
+    FALCOR_CHECK(
+        per_edge || input.crease_sharpnesses.size() == input.crease_lengths.size(),
+        "Mesh '{}' has {} crease sharpnesses for {} creases of {} edges",
+        input.name,
+        input.crease_sharpnesses.size(),
+        input.crease_lengths.size(),
+        edge_total
+    );
+
+    creases.vertex_pairs.reserve(2 * edge_total);
+    creases.sharpnesses.reserve(edge_total);
+    size_t chain_start = 0;
+    size_t edge_index = 0;
+    for (size_t crease = 0; crease < input.crease_lengths.size(); ++crease) {
+        const size_t length = size_t(input.crease_lengths[crease]);
+        for (size_t k = 0; k + 1 < length; ++k) {
+            creases.vertex_pairs.push_back(input.crease_indices[chain_start + k]);
+            creases.vertex_pairs.push_back(input.crease_indices[chain_start + k + 1]);
+            creases.sharpnesses.push_back(input.crease_sharpnesses[per_edge ? edge_index : crease]);
+            ++edge_index;
+        }
+        chain_start += length;
+    }
+    return creases;
+}
+
 
 /// Append one coarse face's transformed facets with one destination-vector size change.
 void append_triangles(std::vector<uint3>& destination, std::span<const int3> source)
@@ -467,7 +534,17 @@ ImporterMesh tessellate_subdivision_surface(const TessellatorInputMesh& input, i
     Sdc::Options options;
     set_vtx_boundary_interpolation(options, input.vertex_boundary_interpolation);
     set_fvar_linear_interpolation(options, input.face_varying_linear_interpolation);
+    set_triangle_subdivision(options, input.triangle_subdivision_rule);
     Far::TopologyRefinerFactory<Far::TopologyDescriptor>::Options refiner_options(scheme, options);
+
+    const CreaseEdges creases = get_crease_edges(input);
+    FALCOR_CHECK(
+        input.corner_sharpnesses.size() == input.corner_indices.size(),
+        "Mesh '{}' has {} corner sharpnesses for {} corners",
+        input.name,
+        input.corner_sharpnesses.size(),
+        input.corner_indices.size()
+    );
 
     Far::TopologyDescriptor descriptor = {};
     descriptor.numVertices = int(vertex_count);
@@ -476,6 +553,12 @@ ImporterMesh tessellate_subdivision_surface(const TessellatorInputMesh& input, i
     descriptor.vertIndicesPerFace = input.face_vertex_indices.data();
     descriptor.numHoles = int(input.hole_indices.size());
     descriptor.holeIndices = input.hole_indices.data();
+    descriptor.numCreases = int(creases.sharpnesses.size());
+    descriptor.creaseVertexIndexPairs = creases.vertex_pairs.empty() ? nullptr : creases.vertex_pairs.data();
+    descriptor.creaseWeights = creases.sharpnesses.empty() ? nullptr : creases.sharpnesses.data();
+    descriptor.numCorners = int(input.corner_indices.size());
+    descriptor.cornerVertexIndices = input.corner_indices.empty() ? nullptr : input.corner_indices.data();
+    descriptor.cornerWeights = input.corner_sharpnesses.empty() ? nullptr : input.corner_sharpnesses.data();
     descriptor.isLeftHanded = left_handed;
     descriptor.numFVarChannels = int(fvar_channels.size());
     descriptor.fvarChannels = fvar_channels.empty() ? nullptr : fvar_channels.data();

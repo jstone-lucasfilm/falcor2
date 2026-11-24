@@ -47,6 +47,13 @@ enum class VertexBoundaryInterpolation {
     edge_and_corner,
 };
 
+/// How Catmull-Clark refines a triangle face: by the scheme's own rule, or by the smoother rule that
+/// UsdGeomMesh's triangleSubdivisionRule names "smooth".
+enum class TriangleSubdivisionRule {
+    catmull_clark,
+    smooth,
+};
+
 /// A borrowed attribute stored as a tightly packed table of fixed-width scalar arrays.
 /// The component count is selected at runtime. An unspecified attribute type means float32.
 /// Triangulation preserves scalar values exactly. Refined subdivision copies constant and uniform values exactly;
@@ -86,10 +93,22 @@ struct TessellatorInputMesh {
     MeshOrientation orientation = MeshOrientation::right_handed;
     FaceVaryingLinearInterpolation face_varying_linear_interpolation = FaceVaryingLinearInterpolation::corners_plus_1;
     VertexBoundaryInterpolation vertex_boundary_interpolation = VertexBoundaryInterpolation::edge_and_corner;
+    TriangleSubdivisionRule triangle_subdivision_rule = TriangleSubdivisionRule::catmull_clark;
 
     std::span<const int> face_vertex_counts;
     std::span<const int> face_vertex_indices;
     std::span<const int> hole_indices;
+
+    /// Semi-sharp creases and corners, in the form UsdGeomMesh and PxOsdSubdivTags author them, read only by
+    /// refined subdivision. crease_indices holds each crease as a chain of vertex indices and crease_lengths the
+    /// number of vertices in each chain, at least two; crease_sharpnesses holds one value per crease, or one per
+    /// edge of every chain. corner_sharpnesses holds one value per corner vertex. A sharpness of 10 or more is
+    /// infinitely sharp, in USD and OpenSubdiv alike.
+    std::span<const int> crease_indices;
+    std::span<const int> crease_lengths;
+    std::span<const float> crease_sharpnesses;
+    std::span<const int> corner_indices;
+    std::span<const float> corner_sharpnesses;
     /// Import-processing properties, initialized with ImporterMesh::make_properties().
     Properties properties;
 

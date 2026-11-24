@@ -120,6 +120,36 @@ get_vertex_boundary_interpolation(const pxr::TfToken& interpolation, std::string
     return VertexBoundaryInterpolation::none;
 }
 
+TriangleSubdivisionRule get_triangle_subdivision_rule(const pxr::TfToken& rule, std::string_view mesh_name)
+{
+    if (rule == pxr::UsdGeomTokens->catmullClark || rule.IsEmpty())
+        return TriangleSubdivisionRule::catmull_clark;
+    if (rule == pxr::UsdGeomTokens->smooth)
+        return TriangleSubdivisionRule::smooth;
+
+    sgl::log_warn(
+        "Unknown triangle subdivision rule '{}' on mesh '{}'; using Catmull-Clark.",
+        rule.GetString(),
+        mesh_name
+    );
+    return TriangleSubdivisionRule::catmull_clark;
+}
+
+/// Read a fixed float array, such as a crease's sharpnesses, at the topology's time. Sharpness is part of the
+/// subdivision topology, so a time-varying value is read once, as the indices it pairs with are.
+bool read_fixed_floats(const pxr::UsdAttribute& attribute, pxr::VtArray<float>& values, pxr::UsdTimeCode time)
+{
+    if (!attribute)
+        return false;
+    if (attribute.ValueMightBeTimeVarying()) {
+        sgl::log_warn(
+            "'{}' may vary over time; reading the subdivision tags at one time.",
+            attribute.GetPath().GetString()
+        );
+    }
+    return attribute.Get(&values, time);
+}
+
 template<typename T>
 MeshAttributeStream make_mesh_attribute_stream(
     ImporterMeshDefaultAttribute attribute,
@@ -268,6 +298,10 @@ ImporterMesh convert_usd_mesh(
         get_attribute(usd_mesh.GetInterpolateBoundaryAttr(), UsdGeomTokens->edgeAndCorner),
         mesh_name
     );
+    input.triangle_subdivision_rule = get_triangle_subdivision_rule(
+        get_attribute(usd_mesh.GetTriangleSubdivisionRuleAttr(), UsdGeomTokens->catmullClark),
+        mesh_name
+    );
 
     UsdGeomPrimvar normals_primvar = primvar_API.FindPrimvarWithInheritance(TfToken("primvars:normals"));
     // USD-authored normals apply only to polygonal meshes. Subdivision schemes define their own normals, including
@@ -337,6 +371,40 @@ ImporterMesh convert_usd_mesh(
     if (auto attr = usd_mesh.GetHoleIndicesAttr(); attr)
         read_fixed_indices(attr, hole_indices, initial_time, import_options.import_mesh_motion);
     input.hole_indices = std::span<const int>(hole_indices.cdata(), hole_indices.size());
+
+    // Creases and corners shape refined subdivision only; ordinary triangulation ignores them.
+    VtArray<int> crease_indices;
+    VtArray<int> crease_lengths;
+    VtArray<float> crease_sharpnesses;
+    VtArray<int> corner_indices;
+    VtArray<float> corner_sharpnesses;
+    if (input.subdivision_scheme != SubdivisionScheme::none && refinement_level > 0) {
+        read_fixed_indices(
+            usd_mesh.GetCreaseIndicesAttr(),
+            crease_indices,
+            initial_time,
+            import_options.import_mesh_motion
+        );
+        read_fixed_indices(
+            usd_mesh.GetCreaseLengthsAttr(),
+            crease_lengths,
+            initial_time,
+            import_options.import_mesh_motion
+        );
+        read_fixed_floats(usd_mesh.GetCreaseSharpnessesAttr(), crease_sharpnesses, initial_time);
+        read_fixed_indices(
+            usd_mesh.GetCornerIndicesAttr(),
+            corner_indices,
+            initial_time,
+            import_options.import_mesh_motion
+        );
+        read_fixed_floats(usd_mesh.GetCornerSharpnessesAttr(), corner_sharpnesses, initial_time);
+    }
+    input.crease_indices = std::span<const int>(crease_indices.cdata(), crease_indices.size());
+    input.crease_lengths = std::span<const int>(crease_lengths.cdata(), crease_lengths.size());
+    input.crease_sharpnesses = std::span<const float>(crease_sharpnesses.cdata(), crease_sharpnesses.size());
+    input.corner_indices = std::span<const int>(corner_indices.cdata(), corner_indices.size());
+    input.corner_sharpnesses = std::span<const float>(corner_sharpnesses.cdata(), corner_sharpnesses.size());
 
     std::vector<std::string> secondary_primvar_names;
     secondary_primvar_names.reserve(texcoord_primvar_names.size());
